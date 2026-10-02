@@ -142,9 +142,10 @@ class GameData:
             files = {p.path: data[p.offset:p.offset + p.length] for p in pkg if not p.attrib & FOLDER}
             stems = [path[:-3] for path in files if path.endswith("_ge")]
             short = [s.rsplit("/", 1)[-1] for s in stems]
+            lowered = [s.lower() for s in short]  # output may land on a case-insensitive file system
             for stem, name in zip(stems, short):
                 # Same model name in two package folders: keep the folder in the name.
-                if short.count(name) > 1:
+                if lowered.count(name.lower()) > 1:
                     name = stem.replace("/", "__")
                 model_label = f"{label}/{stem}"
                 if filt is not None and not filt(model_label):
