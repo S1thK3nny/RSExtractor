@@ -287,6 +287,18 @@ def lod_labels(meshes: List[Mesh]) -> List[Optional[str]]:
     return labels
 
 
+def _transform(positions: np.ndarray, normals: Optional[np.ndarray], m: np.ndarray):
+    """Apply a 4x4 matrix to positions and (renormalised) normals."""
+    if np.allclose(m, np.eye(4), atol=1e-9):
+        return positions, normals
+    positions = positions @ m[:3, :3].T + m[:3, 3]
+    if normals is not None:
+        n = normals.astype(np.float64) @ np.linalg.inv(m[:3, :3])
+        lens = np.linalg.norm(n, axis=1, keepdims=True)
+        normals = (n / np.where(lens > 1e-9, lens, 1.0)).astype(np.float32)
+    return positions, normals
+
+
 class Exporter:
     def __init__(self, game: GameData, out_dir: str, embed_textures: bool = False,
                  texture_format: str = "png", skeletons: bool = True, runtime: Optional[Runtime] = None,
@@ -320,7 +332,8 @@ class Exporter:
         scene = Scene(m.name)
         base = safe_name(m.name)
 
-        rig = Rig.build(m.parts.get("su"), m.parts["ge"], self.g.game, m.parts.get("nm")) if self.skeletons else None
+        nodes = Rig.build(m.parts.get("su"), m.parts["ge"], self.g.game, m.parts.get("nm"))
+        rig = nodes if self.skeletons else None
         root = 0
         if rig is not None:
             root = rig.add_bones(scene, base)
@@ -330,13 +343,16 @@ class Exporter:
                     clips.insert(0, (m.name, m.parts["an"]))
                 self.stats["animations"] += add_animations(scene, rig, root, clips, self.runtime, self.log,
                                                            self.pool)
-            if not (scene.animations or rig.has_joints or rig.is_articulated(geo.meshes)):
+            if not (scene.animations or rig.has_joints or rig.is_skinned(geo.meshes)):
                 rig = None
                 scene = Scene(m.name)
+        layout = None
         if rig is None:
-            # Articulated models (walkers, troopers) store meshes relative to their nodes.
-            place_static_meshes(geo.meshes, m.parts.get("su"), m.parts["ge"], self.g.game)
             scene.nodes.append(SceneNode(base))
+            if nodes is not None:
+                layout = nodes.part_layout(geo.meshes)
+            else:
+                place_static_meshes(geo.meshes, m.parts.get("su"), m.parts["ge"], self.g.game)
         else:
             self.stats["skeletons"] += 1
         # One null per LOD band so each level can be shown or hidden as a group.
@@ -345,6 +361,9 @@ class Exporter:
         for label in sorted({lb for lb in labels if lb}, key=lambda lb: [int(x) for x in lb[3:].split("_")]):
             lod_nodes[label] = len(scene.nodes)
             scene.nodes.append(SceneNode(f"{base}_{label}", parent=-1 if rig is not None else 0))
+        part_nodes: Dict[int, int] = {}
+        if layout is not None:
+            part_nodes = self._add_parts(scene, nodes, layout, labels, lod_nodes, base)
         mat_map: Dict[int, int] = {}
         for mesh_no, (mesh, label) in enumerate(zip(geo.meshes, labels)):
             if mesh.material_index not in mat_map:
@@ -354,8 +373,14 @@ class Exporter:
             uvs = [mesh.uvs] + list(mesh.extra_uvs) if mesh.uvs is not None else []
             positions, normals = mesh.positions.astype(np.float64), mesh.normals
             bones = weights = None
+            parent = lod_nodes[label] if label else (-1 if rig is not None else 0)
             if rig is not None:
                 positions, normals, bones, weights = rig.skin(mesh, root)
+            elif layout is not None:
+                node, matrix = layout[0][mesh_no], layout[1][mesh_no]
+                positions, normals = _transform(positions, normals, matrix)
+                if node >= 0:
+                    parent = part_nodes[node]
             scene.meshes.append(SceneMesh(
                 name=f"{base}_{mesh_no:02d}" + (f"_{label}" if label else ""),
                 positions=positions,
@@ -364,7 +389,7 @@ class Exporter:
                 uvs=uvs,
                 colors=mesh.colors,
                 material=mat_map[mesh.material_index],
-                node=lod_nodes[label] if label else (-1 if rig is not None else 0),
+                node=parent,
                 skin_bones=bones,
                 skin_weights=weights,
             ))
@@ -372,6 +397,32 @@ class Exporter:
         write_fbx(scene, path, embed_textures=self.embed)
         self.stats["models"] += 1
         return path
+
+    @staticmethod
+    def _add_parts(scene: Scene, rig: Rig, layout, labels, lod_nodes: Dict[str, int], base: str) -> Dict[int, int]:
+        """Add one empty per part node (on its pivot); returns node -> scene index.
+        A top-level part goes under its LOD empty when all its meshes share one
+        LOD band, otherwise under the model root."""
+        mesh_nodes, _matrices, frames = layout
+        subtree: Dict[int, set] = {n: set() for n in frames}
+        for node, label in zip(mesh_nodes, labels):
+            while node >= 0:
+                subtree[node].add(label)
+                node = rig.nodes[node].parent
+        index: Dict[int, int] = {}
+        for n in sorted(frames):
+            parent = rig.nodes[n].parent
+            if parent >= 0:
+                scene_parent, parent_frame = index[parent], frames[parent]
+            else:
+                bands = subtree[n]
+                band = next(iter(bands)) if len(bands) == 1 else None
+                scene_parent = lod_nodes[band] if band else 0
+                parent_frame = np.eye(4)
+            index[n] = len(scene.nodes)
+            scene.nodes.append(SceneNode(f"{base}_{rig.names[n]}", parent=scene_parent,
+                                         matrix=np.linalg.inv(parent_frame) @ frames[n]))
+        return index
 
     def _material(self, mat: Optional[Material], index: int, folder: str) -> SceneMaterial:
         if mat is None:

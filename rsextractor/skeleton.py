@@ -163,6 +163,20 @@ def local_matrices(su: bytes, game: int, xf_values: Optional[bytes] = None,
     return out
 
 
+def node_pivots(su: bytes, game: int) -> List[np.ndarray]:
+    """Rotate pivot of every node in its own space (transform floats 9..11; joints
+    rotate about their origin)."""
+    h = struct.unpack_from(">15I", su, 0)
+    stride = 0x68 if game == 2 else 0x6C
+    out = []
+    for node in node_hierarchy(su, game):
+        if node.joint or node.index >= h[11]:
+            out.append(np.zeros(3))
+        else:
+            out.append(np.array(struct.unpack_from(">3f", su, h[12] + node.index * stride + 36), dtype=np.float64))
+    return out
+
+
 def evaluate_nodes(su: bytes, game: int, xf_values: Optional[bytes] = None,
                    jt_values: Optional[bytes] = None) -> List[np.ndarray]:
     """World matrices of all nodes in evaluation order (bind pose unless

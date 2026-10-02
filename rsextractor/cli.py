@@ -112,7 +112,7 @@ def main(argv=None) -> int:
     pe.add_argument("--embed", action="store_true", help="embed textures inside the FBX files")
     pe.add_argument("--no-images", action="store_true", help="skip standalone images (menus, backdrops, fonts)")
     pe.add_argument("--no-animations", action="store_true", help="export skeletons and skins but no animation clips")
-    pe.add_argument("--no-skeletons", action="store_true", help="export static meshes only (no bones, skins or animation)")
+    pe.add_argument("--no-skeletons", action="store_true", help="no bones, skins or animation (parts still keep their pivots)")
     pe.add_argument("-j", "--jobs", type=int, default=0,
                     help="processes for evaluating animations (default: one per CPU core)")
     pe.add_argument("-v", "--verbose", action="store_true")

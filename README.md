@@ -50,8 +50,14 @@ Models with levels of detail get one empty per level (`<model>_LOD0`,
 (`<model>_07_LOD1`; `_LOD2_3` = shown in LOD2 and LOD3). Meshes drawn at every
 distance hang directly under the model root. LOD0 is the full detail version.
 
-Animated and articulated models (characters, walkers, turrets, anything with
-joints or skinned meshes) get a skeleton: a root bone named after the model and
+Models with moving parts but no skinning (S-foils, cockpits, turrets, wing
+hinges) keep the game's part hierarchy as empties: every part hangs under an
+empty placed on its pivot (the Maya rotate pivot), so rotating that empty swings
+the part around its real hinge. Meshes that do not belong to a part stay under
+the model root.
+
+Animated models and anything with joints or skinned meshes (characters,
+walkers) get a skeleton instead: a root bone named after the model and
 one bone per node (Rebel Strike has the original Maya names, Rogue Leader
 numbered ones). Every animation clip of the model becomes an animation take
 (Blender: one action per clip), baked at 24 frames per second. Clips are

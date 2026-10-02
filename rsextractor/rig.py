@@ -19,7 +19,7 @@ import numpy as np
 from .anim import Clip, EmulationError, FPS, Runtime, SetupProgram
 from .scene import Scene, SceneAnimation, SceneNode
 from .skeleton import (Influence, NodeRef, evaluate_nodes, inverse_bind, local_matrices, name_tables,
-                       node_hierarchy, skin_palette, vertex_influences)
+                       node_hierarchy, node_pivots, skin_palette, vertex_influences)
 
 MAX_INFLUENCES = 4
 
@@ -138,14 +138,54 @@ class Rig:
                     nrm[v] = n / ln if ln > 1e-9 else n
         return pos, nrm, bones, weights
 
-    def is_articulated(self, meshes) -> bool:
-        """True when meshes are skinned or sit on more than the root."""
+    def part_layout(self, meshes) -> Tuple[List[int], List[np.ndarray], Dict[int, np.ndarray]]:
+        """Static export with per-part origins: every rigidly attached mesh hangs
+        under its node, whose frame sits on the node's rotate pivot (the Maya
+        pivot the part turns around). Returns the node of every mesh (-1 = model
+        root), the matrix taking its stored vertices into that frame, and the
+        world frame of every node needed (mesh nodes and their ancestors)."""
+        pivots = node_pivots(self.su, self.game)
+        frames: Dict[int, np.ndarray] = {}
+
+        def frame(n: int) -> np.ndarray:
+            if n not in frames:
+                t = np.eye(4)
+                t[:3, 3] = pivots[n]
+                frames[n] = self.rest_world[n] @ t
+            return frames[n]
+
+        mesh_nodes: List[int] = []
+        matrices: List[np.ndarray] = []
+        for mesh in meshes:
+            infl = self.palette.get(mesh.node_index, [])
+            if mesh.skin_runs or mesh.vertex_matrix is not None or len(infl) != 1:
+                mesh_nodes.append(-1)
+                matrices.append(np.eye(4))
+                continue
+            node, bind, _w = infl[0]
+            b = inverse_bind(self.ge, bind) if bind is not None else None
+            b = np.eye(4) if b is None else b
+            if not 0 <= node < len(self.nodes):
+                mesh_nodes.append(-1)
+                matrices.append(b)
+                continue
+            mesh_nodes.append(node)
+            matrices.append(np.linalg.inv(frame(node)) @ self.rest_world[node] @ b)
+        for n in list(frames):
+            p = self.nodes[n].parent
+            while p >= 0:
+                frame(p)
+                p = self.nodes[p].parent
+        return mesh_nodes, matrices, frames
+
+    def is_skinned(self, meshes) -> bool:
+        """True when a mesh blends several matrices (per-vertex matrices, skin
+        runs or weighted palette entries); rigid parts work without bones."""
         for mesh in meshes:
             if mesh.skin_runs or mesh.vertex_matrix is not None:
                 return True
-            for node, bind, _w in self.palette.get(mesh.node_index, []):
-                if 0 <= node < len(self.nodes) and not np.allclose(self.rest_world[node], np.eye(4), atol=1e-5):
-                    return True
+            if len(self.palette.get(mesh.node_index, [])) > 1:
+                return True
         return False
 
     def bake(self, clip_data: bytes, runtime: Optional[Runtime]) -> "BakeResult":
