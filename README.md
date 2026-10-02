@@ -6,9 +6,9 @@ III: Rebel Strike**, straight from your own disc images.
 
 * Models → binary **FBX 7.4** (meshes, normals, UVs, vertex colors, materials,
   texture links). Imports into Blender, Maya, 3ds Max, Unity and Unreal.
-* Textures → **PNG** next to each model (`textures/`), full resolution
-  (including RS3's streamed high-resolution mips).
-* Standalone images (menus, backdrops, gallery art, HUD, fonts) → PNG.
+* Textures → **PNG** or **TGA** (32-bit with alpha) next to each model
+  (`textures/`), full resolution (including RS3's streamed high-resolution mips).
+* Standalone images (menus, backdrops, gallery art, HUD, fonts) → PNG or TGA.
 
 ## Requirements
 
@@ -29,7 +29,10 @@ python -m rsextractor extract rs3.iso -o out -f plCraft/xwing -f falcon
 # list the models on a disc
 python -m rsextractor list rs2.iso -f lvlPack01
 
-# embed the PNGs inside the FBX files instead of referencing them
+# write textures and images as TGA instead of PNG
+python -m rsextractor extract rs2.iso -t tga
+
+# embed the textures inside the FBX files instead of referencing them
 python -m rsextractor extract rs2.iso --embed
 ```
 

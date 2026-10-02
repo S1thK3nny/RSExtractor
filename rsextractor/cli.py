@@ -9,7 +9,7 @@ import time
 import traceback
 
 from .disc import Disc
-from .extract import Exporter, GameData, detect_game, export_images
+from .extract import TEXTURE_FORMATS, Exporter, GameData, detect_game, export_images
 
 
 def _filter(patterns):
@@ -47,7 +47,7 @@ def cmd_extract(args) -> int:
         t0 = time.time()
         print("Indexing texture pools...")
         game.index_textures()
-        exporter = Exporter(game, out, embed_textures=args.embed)
+        exporter = Exporter(game, out, embed_textures=args.embed, texture_format=args.texture_format)
         failures = 0
         for m in game.iter_models(_filter(args.filter)):
             label = f"{m.archive}/{m.entry}/{m.name}"
@@ -63,7 +63,7 @@ def cmd_extract(args) -> int:
         images = 0
         if not args.no_images:
             print("Exporting standalone images...")
-            images = export_images(game, out, _filter(args.filter))
+            images = export_images(game, out, _filter(args.filter), args.texture_format)
         s = exporter.stats
         if args.verbose and exporter.missing:
             print("Textures not found:")
@@ -89,10 +89,12 @@ def main(argv=None) -> int:
     pl.add_argument("-f", "--filter", action="append", help="glob or substring on archive/entry/model")
     pl.set_defaults(func=cmd_list)
 
-    pe = sub.add_parser("extract", help="export models (FBX) and textures (PNG)")
+    pe = sub.add_parser("extract", help="export models (FBX) and textures (PNG or TGA)")
     pe.add_argument("iso")
     pe.add_argument("-o", "--out", default="output", help="output directory (default: ./output)")
     pe.add_argument("-f", "--filter", action="append", help="glob or substring on archive/entry/model")
+    pe.add_argument("-t", "--texture-format", choices=sorted(TEXTURE_FORMATS), default="png",
+                    help="file format for textures and standalone images (default: png)")
     pe.add_argument("--embed", action="store_true", help="embed textures inside the FBX files")
     pe.add_argument("--no-images", action="store_true", help="skip standalone images (menus, backdrops, fonts)")
     pe.add_argument("-v", "--verbose", action="store_true")

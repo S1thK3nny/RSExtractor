@@ -1,4 +1,4 @@
-"""End-to-end extraction: disc image -> FBX models + PNG textures."""
+"""End-to-end extraction: disc image -> FBX models + PNG/TGA textures."""
 from __future__ import annotations
 
 import os
@@ -21,6 +21,19 @@ from .skeleton import place_static_meshes
 from .texture import TextureLibrary
 
 Log = Callable[[str], None]
+
+# Texture file formats: name -> Pillow save options. TGA is written uncompressed with
+# its 8-bit alpha channel, which every DCC tool and engine reads.
+TEXTURE_FORMATS: Dict[str, dict] = {
+    "png": {"format": "PNG", "optimize": False},
+    "tga": {"format": "TGA", "rle": False},
+}
+
+
+def save_image(img: np.ndarray, path: str, fmt: str) -> None:
+    """Save an RGBA8 array as ``fmt`` (a key of ``TEXTURE_FORMATS``)."""
+    Image.fromarray(img, "RGBA").save(path, **TEXTURE_FORMATS[fmt])
+
 
 # RS3 keeps a global table of quantized normals in the boot DOL (data section 4).
 RS3_NORMAL_TABLE_ADDR = 0x80052C00
@@ -174,8 +187,8 @@ def decode_image_resource(data: bytes) -> Optional[np.ndarray]:
     return gx.decode(data[32:], fmt, w, h)
 
 
-def export_images(game: GameData, out_dir: str, filt=None) -> int:
-    """Write every standalone image resource as PNG under ``out_dir/<archive>/images``."""
+def export_images(game: GameData, out_dir: str, filt=None, texture_format: str = "png") -> int:
+    """Write every standalone image resource under ``out_dir/<archive>/images``."""
     count = 0
     for archive, entry in game.iter_entries(filt):
         if entry.name.endswith(("_tpi", "_tpd")):
@@ -187,18 +200,20 @@ def export_images(game: GameData, out_dir: str, filt=None) -> int:
         if img is None:
             continue
         parts = [safe_name(p) for p in entry.name.split("/")]
-        target = os.path.join(out_dir, safe_name(game.archive_label(archive)), "images", *parts) + ".png"
+        target = os.path.join(out_dir, safe_name(game.archive_label(archive)), "images", *parts) + "." + texture_format
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        Image.fromarray(img, "RGBA").save(target)
+        save_image(img, target, texture_format)
         count += 1
     return count
 
 
 class Exporter:
-    def __init__(self, game: GameData, out_dir: str, embed_textures: bool = False, log: Log = print):
+    def __init__(self, game: GameData, out_dir: str, embed_textures: bool = False,
+                 texture_format: str = "png", log: Log = print):
         self.g = game
         self.out_dir = out_dir
         self.embed = embed_textures
+        self.texture_format = texture_format
         self.log = log
         self.written_textures: Dict[str, str] = {}
         self.stats = {"models": 0, "skipped": 0, "textures": 0, "missing_textures": 0}
@@ -257,8 +272,8 @@ class Exporter:
         return sm
 
     def _texture_file(self, ref, folder: str, mat_name: str) -> Optional[str]:
-        """Write the texture PNG into ``folder/textures`` and return its relative path."""
-        fname = f"{safe_name(mat_name)}_{ref.hash.hex()[:8]}.png"
+        """Write the texture into ``folder/textures`` and return its relative path."""
+        fname = f"{safe_name(mat_name)}_{ref.hash.hex()[:8]}.{self.texture_format}"
         rel = f"textures/{fname}"
         target = os.path.join(folder, "textures", fname)
         if os.path.exists(target):
@@ -273,7 +288,7 @@ class Exporter:
                 self.written_textures[key] = ""
                 return None
             os.makedirs(os.path.dirname(target), exist_ok=True)
-            Image.fromarray(img, "RGBA").save(target, optimize=False)
+            save_image(img, target, self.texture_format)
             self.written_textures[key] = target
             self.stats["textures"] += 1
             return rel
