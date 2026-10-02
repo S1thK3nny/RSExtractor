@@ -20,6 +20,12 @@ normals and a NULL normal array means "index the global quantized normal
 table" stored in the boot DOL.  Array pointers with the high bit set refer to
 an external vertex buffer (not used by packaged models).
 
+Level of detail (RS2 FUN_7fd25e08): ``mesh+2`` indexes the ``ge+0x1C`` table
+(0x14 byte entries, 0xFFFF = always drawn) whose ``+0x10`` points to the switch
+distances. The mesh is drawn between ``dist[near-1]`` and ``dist[far-1]`` with
+``near = mesh+7`` (0 = from the camera) and ``far = mesh+8`` (0xFF = no limit),
+so chains such as (0,1) (1,2) (2,0xFF) are LOD0, LOD1 and LOD2.
+
 Mesh flags (GXSetVtxDesc): 0x2000 per-vertex matrix index, 0x1000 NBT instead of
 NRM, 0x4000 color0, 0x8000 tex0; bits 0/1/2/3 select 16-bit indices for
 pos/normal/color/uv.  The VAT word of the format node (picked by the display
@@ -107,7 +113,9 @@ class Mesh:
     nrm_index: Optional[np.ndarray] = None   # (N,) index into the normal array per vertex
     # RS3 CPU skinning: (bone, position count, normal count) runs over the position/normal arrays
     skin_runs: List[Tuple[int, int, int]] = field(default_factory=list)
-    local_matrix: Optional[int] = None   # mesh+2: vertices are relative to this node matrix (None = model space)
+    lod_entry: Optional[int] = None   # mesh+2: ge+0x1C LOD table entry (None = always drawn)
+    lod_near: int = 0                 # mesh+7: first LOD distance band
+    lod_far: int = 0xFF               # mesh+8: end of the band (0xFF = no limit)
 
 
 @dataclass
@@ -150,7 +158,7 @@ def _parse_mesh(ge: bytes, off: int, vats: List[VertexFormat], node_index: int,
                 material_index: int, translucent: bool, game: int,
                 normal_table: Optional[bytes]) -> Optional[Mesh]:
     matrix_count = u16(ge, off)
-    local_matrix = u16(ge, off + 2)
+    lod_entry = u16(ge, off + 2)
     flags = u16(ge, off + 4)
     if game == 2:
         mtx_list, pos_arr, nrm_arr, clr_arr, uv_arr, _info, dl, dl_size = struct.unpack_from(">8I", ge, off + 0x0C)
@@ -269,7 +277,9 @@ def _parse_mesh(ge: bytes, off: int, vats: List[VertexFormat], node_index: int,
         pos_index=np.array(pos_idx, dtype=np.int32),
         nrm_index=np.array(nrm_idx, dtype=np.int32) if nrm_idx else None,
         skin_runs=skin_runs,
-        local_matrix=None if local_matrix == 0xFFFF else local_matrix,
+        lod_entry=None if lod_entry == 0xFFFF else lod_entry,
+        lod_near=ge[off + 7],
+        lod_far=ge[off + 8],
     )
 
 

@@ -40,6 +40,11 @@ Output layout: `output/RS<n>/<archive>/<resource>/<model>.fbx` with the
 model's textures in `.../<resource>/textures/`. Player craft live under
 `data/plCraft/...`, level content under `lvlPackNN/...`.
 
+Models with levels of detail get one empty per level (`<model>_LOD0`,
+`<model>_LOD1`, ...) holding that level's meshes, which carry the same suffix
+(`<model>_07_LOD1`; `_LOD2_3` = shown in LOD2 and LOD3). Meshes drawn at every
+distance hang directly under the model root. LOD0 is the full detail version.
+
 Units are metres (1 game unit = 1 m), Y up.
 
 ## Status

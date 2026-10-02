@@ -15,7 +15,7 @@ from .archive import Archive, Entry, decompress, parse_package, FOLDER
 from .disc import Disc
 from .fbx import write_fbx
 from .material import Material, parse_materials
-from .model import parse_geometry
+from .model import Mesh, parse_geometry
 from .scene import Scene, SceneMaterial, SceneMesh, SceneNode
 from .skeleton import place_static_meshes
 from .texture import TextureLibrary
@@ -207,6 +207,34 @@ def export_images(game: GameData, out_dir: str, filt=None, texture_format: str =
     return count
 
 
+def lod_labels(meshes: List[Mesh]) -> List[Optional[str]]:
+    """Name the LOD band of every mesh, e.g. ``LOD0`` or ``LOD2_3`` for a mesh shown in
+    both LOD2 and LOD3; None for meshes that are always drawn.
+
+    Levels are the near indices of each LOD table entry's chain. Models with a single
+    level only fade out with distance and get no labels.
+    """
+    top: Dict[int, int] = {}
+    for mesh in meshes:
+        if mesh.lod_entry is not None:
+            top[mesh.lod_entry] = max(top.get(mesh.lod_entry, 0), mesh.lod_near)
+    if not any(top.values()):
+        return [None] * len(meshes)
+    labels: List[Optional[str]] = []
+    for mesh in meshes:
+        if mesh.lod_entry is None:
+            labels.append(None)
+            continue
+        last = top[mesh.lod_entry] if mesh.lod_far == 0xFF else max(mesh.lod_far - 1, mesh.lod_near)
+        if mesh.lod_near == 0 and last >= top[mesh.lod_entry]:
+            labels.append(None)
+        elif last == mesh.lod_near:
+            labels.append(f"LOD{mesh.lod_near}")
+        else:
+            labels.append(f"LOD{mesh.lod_near}_{last}")
+    return labels
+
+
 class Exporter:
     def __init__(self, game: GameData, out_dir: str, embed_textures: bool = False,
                  texture_format: str = "png", log: Log = print):
@@ -235,25 +263,32 @@ class Exporter:
         os.makedirs(folder, exist_ok=True)
 
         scene = Scene(m.name)
-        scene.nodes.append(SceneNode(safe_name(m.name)))
+        base = safe_name(m.name)
+        scene.nodes.append(SceneNode(base))
+        # One null per LOD band so each level can be shown or hidden as a group.
+        labels = lod_labels(geo.meshes)
+        lod_nodes: Dict[str, int] = {}
+        for label in sorted({lb for lb in labels if lb}, key=lambda lb: [int(x) for x in lb[3:].split("_")]):
+            lod_nodes[label] = len(scene.nodes)
+            scene.nodes.append(SceneNode(f"{base}_{label}", parent=0))
         mat_map: Dict[int, int] = {}
-        for mesh_no, mesh in enumerate(geo.meshes):
+        for mesh_no, (mesh, label) in enumerate(zip(geo.meshes, labels)):
             if mesh.material_index not in mat_map:
                 mat_map[mesh.material_index] = len(scene.materials)
                 mat = materials[mesh.material_index] if mesh.material_index < len(materials) else None
                 scene.materials.append(self._material(mat, mesh.material_index, folder))
             uvs = [mesh.uvs] + list(mesh.extra_uvs) if mesh.uvs is not None else []
             scene.meshes.append(SceneMesh(
-                name=f"{safe_name(m.name)}_{mesh_no:02d}",
+                name=f"{base}_{mesh_no:02d}" + (f"_{label}" if label else ""),
                 positions=mesh.positions.astype(np.float64),
                 triangles=mesh.triangles,
                 normals=mesh.normals,
                 uvs=uvs,
                 colors=mesh.colors,
                 material=mat_map[mesh.material_index],
-                node=0,
+                node=lod_nodes[label] if label else 0,
             ))
-        path = os.path.join(folder, safe_name(m.name) + ".fbx")
+        path = os.path.join(folder, base + ".fbx")
         write_fbx(scene, path, embed_textures=self.embed)
         self.stats["models"] += 1
         return path
