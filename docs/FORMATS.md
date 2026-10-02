@@ -111,26 +111,48 @@ Standalone images: 32-byte header `{u16 width, u16 height, u8, u8 format, u8,
 u8 has_mips}`; format codes `0` I4, `1` I8, `2` IA4, `3` IA8, `9` RGB5A3,
 `0xA`/`0xB` RGBA8, `0xC` CMPR.
 
-## Setup `_su` (partially understood)
+## Setup `_su` and node placement
 
-Header (`FUN_7fd283f0`): `[1]` code pointer, `[2]` code size, `[3]`/`[4]`
-relocations, `[7]` node count, `[11]`/`[12]` transform nodes (0x68 bytes),
-`[13]`/`[14]` joints (0x54 bytes), `[0]` node table (u32 per node). The code is
-compiled per model (Maya-style expressions).
+Header (u32 words): `[0]` node command stream, `[1]`/`[2]` compiled code and
+size (per model expression/constraint code, relocated by `[3]`/`[4]`),
+`[11]`/`[12]` transform node count/offset, `[13]`/`[14]` joint count/offset.
 
-Joint record: quaternion at word 10..13, local bind offset at word 17..19.
-After the node table: `{u16 id, u16 child_count, u32 child_list}` entries
-describe the joint hierarchy. Mapping skin palette indices to joints and
-envelope matrices is not finished.
+Command stream (RS2 `FUN_7fd24ef4`): u16 values until `0xFFFF`.
+`0x8000|k` sets the parent of following nodes to output matrix k-1 (0 = none),
+`0x4000|i` evaluates joint i, any other value evaluates transform node i. Each
+evaluated node appends one world matrix.
 
-## RS3 skinning (in progress)
+Transform node (Maya transform; 0x68 bytes in RS2, 0x6C in RS3), floats:
+0 scale pivot, 3 scale, 6 scale pivot translate, 9 rotate pivot, 12 rotate axis
+quaternion, 16 euler rotation, 19 rotate pivot translate, 22 translate, then the
+rotation order (RS2 u32 at +0x64, RS3 byte at +0x65).
+`v' = R * (S * (v - sp) + sp + spt - rp) + rp + rpt + t`, `R = euler * axis`.
 
-* `ge+0x00` → array of 3x4 **inverse bind matrices**, one per bone (192 for Darth
-  Vader, including cape chains). Bind pose of bone *b* = `inverse(M[b])`.
-* Inline block at `ge+0x28` (count at `ge+0x26`): `u16 a @+0x0C, u16 b @+0x0E`,
-  then `a + b` pairs `{u32 n, u32 ptr}`; each `ptr` → `n` records
-  `{u16 bone, u16 index, f32 weight}` (a = single-influence groups, b = blended).
-* Skinned mesh `matrix_list` (count at `mesh+0x00`) is a run-length list
-  `(bone, n_pos, n_nrm)*, last_bone`. The leading groups are already in model
-  space; the remaining "rest" positions are blended at runtime from the records
-  above and are not placed correctly yet.
+Joint (0x54 bytes): 0 scale, 3 rotate axis quaternion, 7 euler rotation,
+10 joint orient quaternion, 14 parent scale, 17 translate, 20 rotation order.
+`M = T * inverse(parent scale) * (orient * euler * axis) * S`.
+
+Euler order codes (`FUN_7fd249c4`, quaternions multiplied left to right):
+0 `qz*qy*qx`, 1 `qy*qz*qx`, 2 `qz*qx*qy`, 3 `qx*qz*qy`, 4 `qx*qy*qz`, 5 `qy*qx*qz`.
+
+Render palette (RS2 `FUN_7fd25e08`): blocks of the `ge+0x28` chain (count
+`ge+0x26`) are `{next, u16 node (1-based, 0 = root), u16 inverse bind index
+(0xFFFF = none), u16 block index, ...}`; `palette[index] = world[node-1] *
+inverse_bind[ge+0x00][bind]`. A mesh-list node's u16 at +8 picks its palette
+entry. With an inverse bind the vertices are model space, without one they are
+local to the node (walkers, level troopers, turrets). `mesh+2` is an index into
+the `ge+0x1C` bounding volume table, not a matrix.
+
+## RS3 skinning
+
+* `ge+0x00` → 3x4 inverse bind matrices.
+* Skin block (a chain block with `u16 a @+0x0C, u16 b @+0x0E`): `a + b` pairs
+  `{u32 n, u32 ptr}`, each `ptr` → `n` records `{u16 joint (1-based), u16
+  inverse bind index, f32 weight}`. Every pair yields one palette matrix
+  `sum(weight * world[joint-1] * inverse_bind[k])`; at bind pose these are all
+  identity, so stored positions are model space.
+* Skinned mesh `matrix_list` (count at `mesh+0x00`) holds `(palette index,
+  n_positions, n_normals)` runs over the position/normal arrays; the CPU routine
+  at `0x8003BD44` (boot DOL) transforms each run with its palette matrix.
+* Cloth (Darth Vader's cape) is stored flat in the bind pose; the game drapes it
+  at run time.

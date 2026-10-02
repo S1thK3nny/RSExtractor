@@ -46,7 +46,8 @@ Units are metres (1 game unit = 1 m), Y up.
 | Static models (all meshes, normals, UVs, vertex colors) | yes | yes |
 | Materials + textures | yes | yes |
 | Standalone images | yes | yes |
-| Skeletons / skin weights | not yet; characters export in bind pose | not yet; blended vertices of characters (shoulders, upper arms, capes) are misplaced |
+| Articulated models (walkers, troopers, turrets) assembled from their node hierarchy | yes | yes |
+| Skeletons / skin weights in the FBX | not yet; characters export in bind pose | not yet; characters export in bind pose, capes lie flat as stored |
 | Animations (`_an`) | no | no |
 | Terrain heightmaps (`h16_*.img`), level object placement (`dref`) | no | no |
 | Sounds | no | no |

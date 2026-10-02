@@ -17,6 +17,7 @@ from .fbx import write_fbx
 from .material import Material, parse_materials
 from .model import parse_geometry
 from .scene import Scene, SceneMaterial, SceneMesh, SceneNode
+from .skeleton import place_static_meshes
 from .texture import TextureLibrary
 
 Log = Callable[[str], None]
@@ -46,7 +47,7 @@ def rs3_normal_table(disc: Disc) -> Optional[bytes]:
 
 
 def safe_name(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_") or "unnamed"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", name) or "unnamed"
 
 
 @dataclass
@@ -212,6 +213,8 @@ class Exporter:
         if not geo.meshes:
             self.stats["skipped"] += 1
             return None
+        # Articulated models (walkers, troopers) store meshes relative to their nodes.
+        place_static_meshes(geo.meshes, m.parts.get("su"), m.parts["ge"], self.g.game)
         materials = parse_materials(m.parts.get("si", b""), self.g.game)
         folder = self.model_dir(m)
         os.makedirs(folder, exist_ok=True)

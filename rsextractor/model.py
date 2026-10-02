@@ -103,6 +103,11 @@ class Mesh:
     matrix_nodes: List[int] = field(default_factory=list)      # skinning palette -> node index
     vertex_matrix: Optional[np.ndarray] = None                  # (N,) palette slot per vertex
     extra_uvs: List[np.ndarray] = field(default_factory=list)   # further UV sets (RS3)
+    pos_index: Optional[np.ndarray] = None   # (N,) index into the mesh position array per vertex
+    nrm_index: Optional[np.ndarray] = None   # (N,) index into the normal array per vertex
+    # RS3 CPU skinning: (bone, position count, normal count) runs over the position/normal arrays
+    skin_runs: List[Tuple[int, int, int]] = field(default_factory=list)
+    local_matrix: Optional[int] = None   # mesh+2: vertices are relative to this node matrix (None = model space)
 
 
 @dataclass
@@ -145,6 +150,7 @@ def _parse_mesh(ge: bytes, off: int, vats: List[VertexFormat], node_index: int,
                 material_index: int, translucent: bool, game: int,
                 normal_table: Optional[bytes]) -> Optional[Mesh]:
     matrix_count = u16(ge, off)
+    local_matrix = u16(ge, off + 2)
     flags = u16(ge, off + 4)
     if game == 2:
         mtx_list, pos_arr, nrm_arr, clr_arr, uv_arr, _info, dl, dl_size = struct.unpack_from(">8I", ge, off + 0x0C)
@@ -158,7 +164,14 @@ def _parse_mesh(ge: bytes, off: int, vats: List[VertexFormat], node_index: int,
         uv_sets = ge[off + 9] + 1
     if not pos_arr or not dl:
         return None
-    matrix_nodes = [u16(ge, mtx_list + 2 * i) for i in range(matrix_count)] if mtx_list else []
+    skin_runs: List[Tuple[int, int, int]] = []
+    if game == 3:
+        # RS3 (0x8003BD44): matrix_count runs of {u16 bone, u16 n_pos, u16 n_nrm}
+        if mtx_list:
+            skin_runs = [struct.unpack_from(">3H", ge, mtx_list + 6 * i) for i in range(matrix_count)]
+        matrix_nodes = [r[0] for r in skin_runs]
+    else:
+        matrix_nodes = [u16(ge, mtx_list + 2 * i) for i in range(matrix_count)] if mtx_list else []
 
     pos_idx: List[int] = []
     nrm_idx: List[int] = []
@@ -253,6 +266,10 @@ def _parse_mesh(ge: bytes, off: int, vats: List[VertexFormat], node_index: int,
         matrix_nodes=matrix_nodes,
         vertex_matrix=np.array(mtx_idx, dtype=np.int32) // 3 if mtx_idx else None,
         extra_uvs=extra_uvs,
+        pos_index=np.array(pos_idx, dtype=np.int32),
+        nrm_index=np.array(nrm_idx, dtype=np.int32) if nrm_idx else None,
+        skin_runs=skin_runs,
+        local_matrix=None if local_matrix == 0xFFFF else local_matrix,
     )
 
 
