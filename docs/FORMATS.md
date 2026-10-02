@@ -68,15 +68,15 @@ normals (RS3 only), `0x4000` color, `0x8000` texcoords; bits 0..3 = 16-bit
 index for pos/normal/color/uv. RS3 meshes without a normal array index a global
 s8 normal table at `0x80052C00` in the boot DOL.
 
-Level of detail (RS2 `FUN_7fd25e08`): `mesh+2` indexes the `ge+0x1C` table
+Level of detail (RS2 `FUN_7fd25e08`, RS3 `FUN_7f395998`): `mesh+2` indexes the `ge+0x1C` table
 (0x14 byte entries, `0xFFFF` = always drawn); entry `+0x10` points to float
 switch distances. A mesh is drawn between `dist[near-1]` (near 0 = from the
 camera) and `dist[far-1]` (far `0xFF` = no limit) and cross fades near the
 edges. Bands form chains such as (0,1) (1,2) (2,0xFF), so the near index is the
 LOD level; a few meshes span several levels, e.g. (2,0xFF) next to (2,3) (3,0xFF).
 Typical distances: 25/120 m for craft, 600 or 10000 m for level objects. A model
-may use several table entries with chains of different lengths. RS3 uses the
-same bytes.
+may use several table entries with chains of different lengths. RS3 runs the
+same test and additionally skips meshes whose node is hidden at run time.
 
 VAT word (RS2 `FUN_7fd28640`, RS3 `FUN_7f398ef0`), one per vertex format index
 (display list opcode & 7):

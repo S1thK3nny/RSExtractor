@@ -20,7 +20,7 @@ normals and a NULL normal array means "index the global quantized normal
 table" stored in the boot DOL.  Array pointers with the high bit set refer to
 an external vertex buffer (not used by packaged models).
 
-Level of detail (RS2 FUN_7fd25e08): ``mesh+2`` indexes the ``ge+0x1C`` table
+Level of detail (RS2 FUN_7fd25e08, RS3 FUN_7f395998): ``mesh+2`` indexes the ``ge+0x1C`` table
 (0x14 byte entries, 0xFFFF = always drawn) whose ``+0x10`` points to the switch
 distances. The mesh is drawn between ``dist[near-1]`` and ``dist[far-1]`` with
 ``near = mesh+7`` (0 = from the camera) and ``far = mesh+8`` (0xFF = no limit),
