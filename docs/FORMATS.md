@@ -122,3 +122,15 @@ Joint record: quaternion at word 10..13, local bind offset at word 17..19.
 After the node table: `{u16 id, u16 child_count, u32 child_list}` entries
 describe the joint hierarchy. Mapping skin palette indices to joints and
 envelope matrices is not finished.
+
+## RS3 skinning (in progress)
+
+* `ge+0x00` → array of 3x4 **inverse bind matrices**, one per bone (192 for Darth
+  Vader, including cape chains). Bind pose of bone *b* = `inverse(M[b])`.
+* Inline block at `ge+0x28` (count at `ge+0x26`): `u16 a @+0x0C, u16 b @+0x0E`,
+  then `a + b` pairs `{u32 n, u32 ptr}`; each `ptr` → `n` records
+  `{u16 bone, u16 index, f32 weight}` (a = single-influence groups, b = blended).
+* Skinned mesh `matrix_list` (count at `mesh+0x00`) is a run-length list
+  `(bone, n_pos, n_nrm)*, last_bone`. The leading groups are already in model
+  space; the remaining "rest" positions are blended at runtime from the records
+  above and are not placed correctly yet.
