@@ -124,9 +124,27 @@ u8 has_mips}`; format codes `0` I4, `1` I8, `2` IA4, `3` IA8, `9` RGB5A3,
 
 ## Setup `_su` and node placement
 
-Header (u32 words): `[0]` node command stream, `[1]`/`[2]` compiled code and
-size (per model expression/constraint code, relocated by `[3]`/`[4]`),
-`[11]`/`[12]` transform node count/offset, `[13]`/`[14]` joint count/offset.
+Header (u32 words, offsets relative to the part):
+
+| word | meaning |
+|------|---------|
+| 0 | node command stream |
+| 1, 2 | compiled setup code: offset, size (see "Setup code") |
+| 3, 4 | code relocations: table, count |
+| 5, 6 | count, table of 8-byte entries (pointer at +4) |
+| 8 | animation channel count |
+| 9, 10 | local storage of the setup code: size, offset of its initial values |
+| 11, 12 | transform nodes: count, offset |
+| 13, 14 | joints: count, offset |
+| 15, 16 | cameras: count, offset (0x20 bytes: focal length, film aperture ...) |
+| 17, 18 | lights: count, offset (0x1C bytes: color ...) |
+| 24, 25 | RS3: constraint solver data, pointer array (non-zero for IK rigs) |
+
+The game relocates the part on load (RS2 `FUN_7fd283f0`, RS3 `FUN_7f3985f8`):
+the pointer words above, the tables at words 6, 20, 22 (RS2) / 6, 20, 23, 25,
+27, 29 (RS3) and the code. RS2 code relocations are `u32` offsets of 32-bit
+addresses; RS3 entries are `{u8 type, u8, u16 low half, u32 offset}` with type
+0 = 32-bit address, 1 = high half (`lis`), 2 = low half.
 
 Command stream (RS2 `FUN_7fd24ef4`): u16 values until `0xFFFF`.
 `0x8000|k` sets the parent of following nodes to output matrix k-1 (0 = none),
@@ -136,7 +154,8 @@ evaluated node appends one world matrix.
 Transform node (Maya transform; 0x68 bytes in RS2, 0x6C in RS3), floats:
 0 scale pivot, 3 scale, 6 scale pivot translate, 9 rotate pivot, 12 rotate axis
 quaternion, 16 euler rotation, 19 rotate pivot translate, 22 translate, then the
-rotation order (RS2 u32 at +0x64, RS3 byte at +0x65).
+rotation order (RS2 u32 at +0x64, RS3 u32 at +0x68; RS3 local matrix
+`FUN_7f3925cc`).
 `v' = R * (S * (v - sp) + sp + spt - rp) + rp + rpt + t`, `R = euler * axis`.
 
 Joint (0x54 bytes): 0 scale, 3 rotate axis quaternion, 7 euler rotation,
@@ -152,18 +171,96 @@ Render palette (RS2 `FUN_7fd25e08`): blocks of the `ge+0x28` chain (count
 inverse_bind[ge+0x00][bind]`. A mesh-list node's u16 at +8 picks its palette
 entry. With an inverse bind the vertices are model space, without one they are
 local to the node (walkers, level troopers, turrets). `mesh+2` is an index into
-the `ge+0x1C` bounding volume table, not a matrix.
+the `ge+0x1C` LOD table (see Geometry), not a matrix.
 
-## RS3 skinning
+## Skinning
 
-* `ge+0x00` → 3x4 inverse bind matrices.
-* Skin block (a chain block with `u16 a @+0x0C, u16 b @+0x0E`): `a + b` pairs
-  `{u32 n, u32 ptr}`, each `ptr` → `n` records `{u16 joint (1-based), u16
-  inverse bind index, f32 weight}`. Every pair yields one palette matrix
-  `sum(weight * world[joint-1] * inverse_bind[k])`; at bind pose these are all
-  identity, so stored positions are model space.
-* Skinned mesh `matrix_list` (count at `mesh+0x00`) holds `(palette index,
-  n_positions, n_normals)` runs over the position/normal arrays; the CPU routine
-  at `0x8003BD44` (boot DOL) transforms each run with its palette matrix.
-* Cloth (Darth Vader's cape) is stored flat in the bind pose; the game drapes it
-  at run time.
+Inverse bind matrices (3x4 floats) are at `ge+0x00`. Weighted palette blocks
+add weight lists to the chain block; records are `{u16 joint (1-based), u16
+inverse bind index, f32 weight}` and a palette matrix is
+`sum(weight * world[joint-1] * inverse_bind[k])`.
+
+* RS2 (`FUN_7fd26994`): `u16 n @+0x0A`, then n entries `{u16, u16 count, u32
+  records}` defining palette entries `index .. index+n-1`. Meshes select
+  entries per vertex (GX matrix index / 3 into the mesh's `matrix_list`).
+* RS3: `u16 a @+0x0C, u16 b @+0x0E`, then `a + b` pairs `{u32 count, u32
+  records}` at +0x10. The first a are palette entries `index ..`, the other b
+  are matrices for CPU skinning. A mesh's `matrix_list` (count at `mesh+0x00`)
+  holds `(matrix, n_positions, n_normals)` runs over its position/normal
+  arrays; with one run the mesh is drawn with that palette entry, with more the
+  CPU routine (`0x8003BD44`, boot DOL) transforms each run with its CPU
+  skinning matrix (RS3 `FUN_7f399520`).
+
+Some skins were bound to a uniformly scaled skeleton (Luke's pilot: x13), so
+`inverse(inverse_bind)` is not the rest pose; the stored vertices are in that
+bind space. Cloth (Darth Vader's cape in RS3) is stored flat; the game drapes
+it at run time.
+
+RS3 `_nm` holds name tables: `u32 count`, count offsets of section headers
+`{u32 data, u32 entries, name}`, entries `{u8, u16 key, u16 value, name}`.
+`matrixarray` names node output matrices (value = index), `jointarray` and
+`transformarray` name joints and transform nodes, `locatormatrix` lists
+locators (key `0x8000|i`, value = parent matrix).
+
+## Animation
+
+### Setup code
+
+Each model's Maya dependency graph (animation curves feeding attributes,
+expressions, constraints, IK) is compiled to PowerPC code in `_su`. The game
+calls it with `r3` = context, `f1` = time / 24, `f2` = frame, `f3` = 24 and
+`r2` = end of the code (its constant pool); RS2 `0x8000a410` and RS3
+`0x80013c80` (boot DOLs) build the context:
+
+```
++0x00 transform attribute array (0x64 bytes per node RS2, 0x68 RS3)
++0x04 joint attribute array (0x50 bytes per joint)
++0x08 camera array            +0x0C light array
++0x10 curve outputs (16 bytes per channel, value at +0)
++0x14 local storage (initialised from _su word 10)
++0x18 curve pointer table of the clip
++0x1C curve sampler (RS2 0x8000a3a4, RS3 0x8003a74c): r3 = curve, r4 = output, f1 = frame
++0x20 RS3: constraint solver entry (0x8003a6f8 -> 0x80014938)
++0x24 RS3: solver data (_su word 25)
+```
+
+The attribute arrays start as copies of the `_su` records (bind pose) and the
+code overwrites what is animated; the node evaluator then builds the matrices
+from them (RS2 `FUN_7fd24ef4` blends up to 8 such pose slots by weight). RS3's
+solver needs the game's own code and globals: it reads the slot and `_su`
+arrays through `0x800614e0` and keeps a per-evaluation node cache (bitset at
+`0x800644f0`, cleared by `0x8001572c` before every call). The extractor runs
+the setup code, and the solver, in a Gekko interpreter with both executables
+mapped (`rsextractor/ppc.py`, `rsextractor/anim.py`).
+
+### Clips `_an`
+
+A model's own `_an` and its standalone clips share one format: `u32 object
+offset`, timed event records (footsteps and similar), then the object.
+
+* RS2 object: `{u32 end, f32 start, f32 end, u32 curve offsets[channels]}`,
+  offsets relative to the object; the channel count comes from `_su` word 8.
+* RS3 object: `{u32, u32, u32, f32 start, f32 end, u32 count, u32 curve
+  offsets[count]}`. RS3 models' own `_an` parts are a bare object.
+
+Frames run at 24 per second. RS2 keeps clips next to their model (also as
+loose archive entries, `data/pilots/pilLuke/...`); RS3 keeps character clips in
+a sibling entry (`hanCharacter_base` -> `hanCharacter_anim`).
+
+Curve (sampler RS2 `0x80009ff8`, RS3 `0x8003a74c`):
+
+```
+u8 flags, u8, u16 segment count, f32 value scale, f32 end time, keys...
+```
+
+* flags `0x02`: constant, value = the f32 at +4.
+* otherwise `count + 1` keys of `stride` halfwords, stride = (8 with flags
+  `0x08`, 5 with `0x04`, else 4) + (2 if flags & 9 else 1). A key starts with
+  its time: f32 when flags & 9, else u16 / 128. With flags `0x08` the closing
+  key may be missing (the last segment runs to the end time).
+* segment value `((a*u + b)*u + c)*u + d`, `u = t - t_key`:
+  * flags `0x08`: a, b, c, d as f32;
+  * else s16 d, then a and b as 24-bit floats (top three bytes of an f32) and,
+    with flags `0x04`, s16 c. s16 values are scaled by `2^-14 * value scale`.
+    Without c the segment ends on the next key's value:
+    `c = (d_next - d) / dt - (a*dt + b) * dt`.

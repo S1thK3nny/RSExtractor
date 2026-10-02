@@ -15,7 +15,9 @@ from .archive import Archive, Entry, decompress, parse_package, FOLDER
 from .disc import Disc
 from .fbx import write_fbx
 from .material import Material, parse_materials
+from .anim import Runtime
 from .model import Mesh, parse_geometry
+from .rig import Rig, add_animations
 from .scene import Scene, SceneMaterial, SceneMesh, SceneNode
 from .skeleton import place_static_meshes
 from .texture import TextureLibrary
@@ -69,6 +71,7 @@ class ModelParts:
     archive: str          # e.g. "data"
     entry: str            # archive entry path, e.g. "plCraft/xwing_base"
     parts: Dict[str, bytes] = field(default_factory=dict)  # suffix -> bytes
+    clips: List[Tuple[str, bytes]] = field(default_factory=list)  # animation clips next to the model
 
 
 class GameData:
@@ -146,14 +149,58 @@ class GameData:
             return self.read_entry(archive, entry)[off:off + length]
         return load
 
+    def _package_clips(self, files: Dict[str, bytes]) -> Dict[str, List[Tuple[str, bytes]]]:
+        """Standalone animation clips of a package, by folder."""
+        clips: Dict[str, List[Tuple[str, bytes]]] = {}
+        for path, data in files.items():
+            if path.endswith("_an") and path[:-3] + "_ge" not in files:
+                folder, _, name = path[:-3].rpartition("/")
+                clips.setdefault(folder, []).append((name, data))
+        return clips
+
+    def _sibling_clips(self, archive: Archive, entry: Entry) -> List[Tuple[str, bytes]]:
+        """RS3 keeps character clips in a sibling entry: ``X_base`` -> ``X_anim``."""
+        if not entry.name.endswith("_base"):
+            return []
+        sibling = archive.get(entry.name[:-5] + "_anim")
+        if sibling is None:
+            return []
+        data = decompress(archive.read_raw(sibling))
+        pkg = parse_package(data)
+        if not pkg:
+            return []
+        files = {p.path: data[p.offset:p.offset + p.length] for p in pkg if not p.attrib & FOLDER}
+        return [clip for group in self._package_clips(files).values() for clip in group]
+
+    def _loose_model(self, archive: Archive, entry: Entry) -> Optional[ModelParts]:
+        """RS2 keeps a few models as loose archive entries (``folder/name_ge`` ...)."""
+        stem = entry.name[:-3]
+        folder, _, name = stem.rpartition("/")
+        parts: Dict[str, bytes] = {}
+        for sfx in ("su", "ge", "si", "an", "cl", "nm"):
+            e = archive.get(f"{stem}_{sfx}")
+            if e is not None and e.length:
+                parts[sfx] = self.read_entry(archive, e) if sfx == "ge" else decompress(archive.read_raw(e))
+        clips = []
+        for e in archive.files():
+            other = e.name[:-3]
+            if (e.name.endswith("_an") and other.rpartition("/")[0] == folder and other != stem
+                    and archive.get(other + "_ge") is None):
+                clips.append((other.rpartition("/")[2], decompress(archive.read_raw(e))))
+        return ModelParts(name, self.archive_label(archive), folder, parts, clips)
+
     def iter_models(self, filt: Optional[Callable[[str], bool]] = None) -> Iterator[ModelParts]:
         for archive, entry in self.iter_entries():
             label = f"{self.archive_label(archive)}/{entry.name}"
             data = self.read_entry(archive, entry)
             pkg = parse_package(data)
             if not pkg:
+                if entry.name.endswith("_ge") and (filt is None or filt(label[:-3])):
+                    yield self._loose_model(archive, entry)
                 continue
             files = {p.path: data[p.offset:p.offset + p.length] for p in pkg if not p.attrib & FOLDER}
+            clips = self._package_clips(files)
+            sibling: Optional[List[Tuple[str, bytes]]] = None
             stems = [path[:-3] for path in files if path.endswith("_ge")]
             short = [s.rsplit("/", 1)[-1] for s in stems]
             lowered = [s.lower() for s in short]  # output may land on a case-insensitive file system
@@ -166,7 +213,12 @@ class GameData:
                     continue
                 parts = {sfx: files[stem + "_" + sfx] for sfx in ("su", "ge", "si", "an", "cl", "nm")
                          if stem + "_" + sfx in files}
-                yield ModelParts(name, self.archive_label(archive), entry.name, parts)
+                model_clips = list(clips.get(stem.rpartition("/")[0], []))
+                if "su" in parts:
+                    if sibling is None:
+                        sibling = self._sibling_clips(archive, entry)
+                    model_clips += sibling
+                yield ModelParts(name, self.archive_label(archive), entry.name, parts, model_clips)
 
 
 # Standalone image resources: 32-byte header {u16 width, u16 height, u8, u8 format,
@@ -237,14 +289,20 @@ def lod_labels(meshes: List[Mesh]) -> List[Optional[str]]:
 
 class Exporter:
     def __init__(self, game: GameData, out_dir: str, embed_textures: bool = False,
-                 texture_format: str = "png", log: Log = print):
+                 texture_format: str = "png", skeletons: bool = True, runtime: Optional[Runtime] = None,
+                 animations: bool = True, pool=None, log: Log = print):
         self.g = game
         self.out_dir = out_dir
         self.embed = embed_textures
         self.texture_format = texture_format
+        self.skeletons = skeletons
+        self.animations = animations
+        self.runtime = runtime
+        self.pool = pool
         self.log = log
         self.written_textures: Dict[str, str] = {}
-        self.stats = {"models": 0, "skipped": 0, "textures": 0, "missing_textures": 0}
+        self.stats = {"models": 0, "skipped": 0, "textures": 0, "missing_textures": 0,
+                      "skeletons": 0, "animations": 0}
         self.missing: List[str] = []
 
     def model_dir(self, m: ModelParts) -> str:
@@ -256,21 +314,37 @@ class Exporter:
         if not geo.meshes:
             self.stats["skipped"] += 1
             return None
-        # Articulated models (walkers, troopers) store meshes relative to their nodes.
-        place_static_meshes(geo.meshes, m.parts.get("su"), m.parts["ge"], self.g.game)
         materials = parse_materials(m.parts.get("si", b""), self.g.game)
         folder = self.model_dir(m)
         os.makedirs(folder, exist_ok=True)
-
         scene = Scene(m.name)
         base = safe_name(m.name)
-        scene.nodes.append(SceneNode(base))
+
+        rig = Rig.build(m.parts.get("su"), m.parts["ge"], self.g.game, m.parts.get("nm")) if self.skeletons else None
+        root = 0
+        if rig is not None:
+            root = rig.add_bones(scene, base)
+            if self.animations:
+                clips = list(m.clips)
+                if "an" in m.parts:
+                    clips.insert(0, (m.name, m.parts["an"]))
+                self.stats["animations"] += add_animations(scene, rig, root, clips, self.runtime, self.log,
+                                                           self.pool)
+            if not (scene.animations or rig.has_joints or rig.is_articulated(geo.meshes)):
+                rig = None
+                scene = Scene(m.name)
+        if rig is None:
+            # Articulated models (walkers, troopers) store meshes relative to their nodes.
+            place_static_meshes(geo.meshes, m.parts.get("su"), m.parts["ge"], self.g.game)
+            scene.nodes.append(SceneNode(base))
+        else:
+            self.stats["skeletons"] += 1
         # One null per LOD band so each level can be shown or hidden as a group.
         labels = lod_labels(geo.meshes)
         lod_nodes: Dict[str, int] = {}
         for label in sorted({lb for lb in labels if lb}, key=lambda lb: [int(x) for x in lb[3:].split("_")]):
             lod_nodes[label] = len(scene.nodes)
-            scene.nodes.append(SceneNode(f"{base}_{label}", parent=0))
+            scene.nodes.append(SceneNode(f"{base}_{label}", parent=-1 if rig is not None else 0))
         mat_map: Dict[int, int] = {}
         for mesh_no, (mesh, label) in enumerate(zip(geo.meshes, labels)):
             if mesh.material_index not in mat_map:
@@ -278,15 +352,21 @@ class Exporter:
                 mat = materials[mesh.material_index] if mesh.material_index < len(materials) else None
                 scene.materials.append(self._material(mat, mesh.material_index, folder))
             uvs = [mesh.uvs] + list(mesh.extra_uvs) if mesh.uvs is not None else []
+            positions, normals = mesh.positions.astype(np.float64), mesh.normals
+            bones = weights = None
+            if rig is not None:
+                positions, normals, bones, weights = rig.skin(mesh, root)
             scene.meshes.append(SceneMesh(
                 name=f"{base}_{mesh_no:02d}" + (f"_{label}" if label else ""),
-                positions=mesh.positions.astype(np.float64),
+                positions=positions,
                 triangles=mesh.triangles,
-                normals=mesh.normals,
+                normals=normals,
                 uvs=uvs,
                 colors=mesh.colors,
                 material=mat_map[mesh.material_index],
-                node=lod_nodes[label] if label else 0,
+                node=lod_nodes[label] if label else (-1 if rig is not None else 0),
+                skin_bones=bones,
+                skin_weights=weights,
             ))
         path = os.path.join(folder, base + ".fbx")
         write_fbx(scene, path, embed_textures=self.embed)

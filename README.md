@@ -5,7 +5,8 @@ Extracts 3D models, materials and textures from the GameCube games
 III: Rebel Strike**, straight from your own disc images.
 
 * Models → binary **FBX 7.4** (meshes, normals, UVs, vertex colors, materials,
-  texture links). Imports into Blender, Maya, 3ds Max, Unity and Unreal.
+  texture links, skeletons, skin weights and animation clips). Imports into
+  Blender, Maya, 3ds Max, Unity and Unreal.
 * Textures → **PNG** or **TGA** (32-bit with alpha) next to each model
   (`textures/`), full resolution (including RS3's streamed high-resolution mips).
 * Standalone images (menus, backdrops, gallery art, HUD, fonts) → PNG or TGA.
@@ -34,6 +35,10 @@ python -m rsextractor extract rs2.iso -t tga
 
 # embed the textures inside the FBX files instead of referencing them
 python -m rsextractor extract rs2.iso --embed
+
+# skeletons and skins but no animation clips (much faster), or static meshes only
+python -m rsextractor extract rs3.iso --no-animations
+python -m rsextractor extract rs3.iso --no-skeletons
 ```
 
 Output layout: `output/RS<n>/<archive>/<resource>/<model>.fbx` with the
@@ -45,6 +50,17 @@ Models with levels of detail get one empty per level (`<model>_LOD0`,
 (`<model>_07_LOD1`; `_LOD2_3` = shown in LOD2 and LOD3). Meshes drawn at every
 distance hang directly under the model root. LOD0 is the full detail version.
 
+Animated and articulated models (characters, walkers, turrets, anything with
+joints or skinned meshes) get a skeleton: a root bone named after the model and
+one bone per node (Rebel Strike has the original Maya names, Rogue Leader
+numbered ones). Every animation clip of the model becomes an animation take
+(Blender: one action per clip), baked at 24 frames per second. Clips are
+evaluated by running the game's own per-model animation code (curves,
+expressions, IK) in a small PowerPC interpreter, so walkers keep their feet
+planted exactly as in the game. This is CPU heavy: animation evaluation runs in
+parallel on all cores (`-j` to change), a full Rebel Strike extraction with its
+~1100 clips takes a while; `--no-animations` skips it.
+
 Units are metres (1 game unit = 1 m), Y up.
 
 ## Status
@@ -55,8 +71,8 @@ Units are metres (1 game unit = 1 m), Y up.
 | Materials + textures | yes | yes |
 | Standalone images | yes | yes |
 | Articulated models (walkers, troopers, turrets) assembled from their node hierarchy | yes | yes |
-| Skeletons / skin weights in the FBX | not yet; characters export in bind pose | not yet; characters export in bind pose, capes lie flat as stored |
-| Animations (`_an`) | no | no |
+| Skeletons / skin weights in the FBX | yes | yes (capes lie flat as stored; the game simulates cloth) |
+| Animations (`_an`), including IK driven walkers | yes | yes |
 | Terrain heightmaps (`h16_*.img`), level object placement (`dref`) | no | no |
 | Sounds | no | no |
 
@@ -67,7 +83,7 @@ Format notes: [docs/FORMATS.md](docs/FORMATS.md).
 FBX is the default. The exporter works from a format-neutral scene
 (`rsextractor/scene.py`), so glTF 2.0 (`.glb`) or OBJ/MTL writers can be
 added without touching the game parsers. glTF would be the better choice for
-web or engine pipelines once skeletons and animation are supported.
+web or engine pipelines.
 
 ## Development
 

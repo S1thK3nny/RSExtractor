@@ -1,4 +1,4 @@
-"""Minimal binary FBX 7.4 writer (meshes, materials, textures, nodes, rigid skins).
+"""Minimal binary FBX 7.4 writer (meshes, materials, textures, skeletons, skins, animation).
 
 Encoding follows the public description of the binary format (as implemented
 by Blender's ``encode_bin.py``): 32-bit node headers for version 7400, a
@@ -25,6 +25,7 @@ _FILE_ID = b"\x28\xb3\x2a\xeb\xb6\x24\xcc\xc2\xbf\xc8\xb0\x2a\xa9\x2b\xfc\xf1"
 _CREATION_TIME = "1970-01-01 10:00:00:000"
 _NULL_RECORD = b"\0" * 13
 _ALWAYS_SENTINEL = {"AnimationStack", "AnimationLayer"}
+_KTIME_PER_SECOND = 46186158000
 
 
 # --------------------------------------------------------------------------- encoding
@@ -158,15 +159,16 @@ class _Ids:
 
 
 def _weld(mesh: SceneMesh) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
-    """Merge duplicate control points (same position and bone). Returns (points, remap, bones)."""
+    """Merge duplicate control points (same position and skin influences).
+    Returns (points, remap, index of the source vertex of every point)."""
     key = np.ascontiguousarray(mesh.positions.astype(np.float32))
-    if mesh.vertex_bones is not None:
-        key = np.concatenate([key, mesh.vertex_bones.astype(np.float32)[:, None]], 1)
+    if mesh.skin_bones is not None:
+        key = np.concatenate([key, mesh.skin_bones.astype(np.float32),
+                              mesh.skin_weights.astype(np.float32)], 1)
+    key = np.ascontiguousarray(key)
     _, first, inverse = np.unique(key.view(np.dtype((np.void, key.dtype.itemsize * key.shape[1]))).ravel(),
                                   return_index=True, return_inverse=True)
-    points = mesh.positions[first]
-    bones = mesh.vertex_bones[first] if mesh.vertex_bones is not None else None
-    return points, inverse.ravel(), bones
+    return mesh.positions[first], inverse.ravel(), first
 
 
 def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
@@ -315,7 +317,7 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
     for mesh in scene.meshes:
         if len(mesh.triangles) == 0:
             continue
-        points, remap, bones = _weld(mesh)
+        points, remap, source = _weld(mesh)
         tri = mesh.triangles
         poly_index = remap[tri].astype(np.int64)
         poly_index[:, 2] = -poly_index[:, 2] - 1
@@ -389,8 +391,9 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
         if 0 <= mesh.material < len(material_ids):
             connect("OO", material_ids[mesh.material], model_id)
 
-        if bones is not None and scene.nodes:
-            mesh_world = scene.world_matrix(mesh.node) if mesh.node >= 0 else np.eye(4)
+        if mesh.skin_bones is not None and scene.nodes:
+            bones = mesh.skin_bones[source]
+            weights = mesh.skin_weights[source]
             skin_id = ids()
             skin = objects.add("Deformer", L(skin_id), S(_name(mesh.name, "Deformer")), S("Skin"))
             skin.add("Version", I(101))
@@ -401,17 +404,21 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
             for bone in np.unique(bones):
                 if bone < 0 or bone >= len(scene.nodes):
                     continue
-                verts = np.nonzero(bones == bone)[0]
-                bone_world = scene.world_matrix(int(bone))
+                hit = (bones == bone) & (weights > 0)
+                verts = np.nonzero(hit.any(axis=1))[0]
+                if not len(verts):
+                    continue
+                vw = np.where(hit, weights, 0.0).sum(axis=1)[verts]
+                link = scene.bind_matrix(int(bone))
                 cid = ids()
                 cl = objects.add("Deformer", L(cid), S(_name(f"{mesh.name}_{scene.nodes[bone].name}", "SubDeformer")),
                                  S("Cluster"))
                 cl.add("Version", I(100))
                 cl.add("UserData", S(""), S(""))
                 cl.add("Indexes", Prop("i", verts.astype(np.int32)))
-                cl.add("Weights", Prop("d", np.ones(len(verts))))
-                cl.add("Transform", Prop("d", _flat(np.linalg.inv(bone_world) @ mesh_world)))
-                cl.add("TransformLink", Prop("d", _flat(bone_world)))
+                cl.add("Weights", Prop("d", vw.astype(np.float64)))
+                cl.add("Transform", Prop("d", _flat(np.linalg.inv(link) @ mesh_world)))
+                cl.add("TransformLink", Prop("d", _flat(link)))
                 count("Deformer")
                 connect("OO", cid, skin_id)
                 connect("OO", node_ids[bone], cid)
@@ -421,13 +428,72 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
         pose = objects.add("Pose", L(pid), S(_name("BindPose", "Pose")), S("BindPose"))
         pose.add("Type", S("BindPose"))
         pose.add("Version", I(100))
-        entries = list(pose_entries) + [(node_ids[i], scene.world_matrix(i)) for i in range(len(scene.nodes))]
+        entries = list(pose_entries) + [(node_ids[i], scene.bind_matrix(i)) for i in range(len(scene.nodes))]
         pose.add("NbPoseNodes", I(len(entries)))
         for oid, m in entries:
             pn = pose.add("PoseNode")
             pn.add("Node", L(oid))
             pn.add("Matrix", Prop("d", _flat(m)))
         count("Pose")
+
+    # --- animations: one stack per clip, baked per-frame T/R/S curves
+    take_names: List[Tuple[str, int, int]] = []
+    for anim in scene.animations:
+        n_frames = len(anim.frames)
+        if not n_frames:
+            continue
+        times = np.array([round((anim.start + k) / anim.fps * _KTIME_PER_SECOND) for k in range(n_frames)],
+                         dtype=np.int64)
+        sid = ids()
+        stack = objects.add("AnimationStack", L(sid), S(_name(anim.name, "AnimStack")), S(""))
+        sp = stack.add("Properties70")
+        _p70(sp, "LocalStart", "KTime", "Time", "", int(times[0]))
+        _p70(sp, "LocalStop", "KTime", "Time", "", int(times[-1]))
+        _p70(sp, "ReferenceStart", "KTime", "Time", "", int(times[0]))
+        _p70(sp, "ReferenceStop", "KTime", "Time", "", int(times[-1]))
+        count("AnimationStack")
+        lid = ids()
+        objects.add("AnimationLayer", L(lid), S(_name("BaseLayer", "AnimLayer")), S(""))
+        count("AnimationLayer")
+        connect("OO", lid, sid)
+        take_names.append((anim.name, int(times[0]), int(times[-1])))
+        for col, node_index in enumerate(anim.nodes):
+            trs = [_decompose(anim.frames[k, col]) for k in range(n_frames)]
+            channels = {
+                "T": np.array([t for t, _, _ in trs]),
+                "R": np.degrees(np.unwrap(np.radians(np.array([r for _, r, _ in trs])), axis=0)),
+                "S": np.array([s for _, _, s in trs]),
+            }
+            rest = _decompose(scene.nodes[node_index].matrix)
+            for kind, prop in (("T", "Lcl Translation"), ("R", "Lcl Rotation"), ("S", "Lcl Scaling")):
+                values = channels[kind]
+                ref = np.array(rest["TRS".index(kind)])
+                if kind == "R":
+                    diff = (values - ref + 180.0) % 360.0 - 180.0
+                else:
+                    diff = values - ref
+                if np.abs(diff).max() < 1e-5:
+                    continue
+                cnid = ids()
+                cn = objects.add("AnimationCurveNode", L(cnid), S(_name(kind, "AnimCurveNode")), S(""))
+                cp = cn.add("Properties70")
+                for axis in range(3):
+                    _p70(cp, f"d|{'XYZ'[axis]}", "Number", "", "A", float(values[0, axis]))
+                count("AnimationCurveNode")
+                connect("OO", cnid, lid)
+                connect("OP", cnid, node_ids[node_index], prop)
+                for axis in range(3):
+                    cid = ids()
+                    curve = objects.add("AnimationCurve", L(cid), S(_name("", "AnimCurve")), S(""))
+                    curve.add("Default", D(float(values[0, axis])))
+                    curve.add("KeyVer", I(4009))
+                    curve.add("KeyTime", Prop("l", times))
+                    curve.add("KeyValueFloat", Prop("f", values[:, axis].astype(np.float32)))
+                    curve.add("KeyAttrFlags", Prop("i", [0x4]))  # linear interpolation
+                    curve.add("KeyAttrDataFloat", Prop("f", [0.0, 0.0, 0.0, 0.0]))
+                    curve.add("KeyAttrRefCount", Prop("i", [n_frames]))
+                    count("AnimationCurve")
+                    connect("OP", cid, cnid, f"d|{'XYZ'[axis]}")
 
     defs = Node("Definitions")
     defs.add("Version", I(100))
@@ -439,7 +505,12 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
         ot.add("Count", I(n))
 
     takes = Node("Takes")
-    takes.add("Current", S(""))
+    takes.add("Current", S(take_names[0][0] if take_names else ""))
+    for name, t0, t1 in take_names:
+        take = takes.add("Take", S(name))
+        take.add("FileName", S(name.replace(" ", "_") + ".tak"))
+        take.add("LocalTime", L(t0), L(t1))
+        take.add("ReferenceTime", L(t0), L(t1))
 
     root_nodes += [defs, objects, connections, takes]
 

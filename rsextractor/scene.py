@@ -13,6 +13,7 @@ class SceneNode:
     parent: int = -1                    # index into Scene.nodes, -1 = root
     matrix: np.ndarray = field(default_factory=lambda: np.eye(4, dtype=np.float64))  # local, column vectors
     is_bone: bool = False
+    bind: Optional[np.ndarray] = None   # world matrix the skin was bound at (default: rest world)
 
 
 @dataclass
@@ -39,8 +40,19 @@ class SceneMesh:
     colors: Optional[np.ndarray] = None  # (N, 4) uint8
     material: int = -1
     node: int = -1                       # node the mesh hangs under
-    # skinning: one bone (node index) per vertex, weight 1.0 (rigid GX matrix skinning)
-    vertex_bones: Optional[np.ndarray] = None
+    # skinning: up to K influences per vertex (node index, -1 = unused) and their weights
+    skin_bones: Optional[np.ndarray] = None    # (N, K) int
+    skin_weights: Optional[np.ndarray] = None  # (N, K) float
+
+
+@dataclass
+class SceneAnimation:
+    """Baked animation: local matrices of ``nodes`` for every frame."""
+    name: str
+    fps: float
+    start: float                         # first frame number
+    nodes: List[int]                     # animated scene node indices
+    frames: np.ndarray                   # (F, len(nodes), 4, 4) local matrices
 
 
 @dataclass
@@ -49,6 +61,7 @@ class Scene:
     nodes: List[SceneNode] = field(default_factory=list)
     meshes: List[SceneMesh] = field(default_factory=list)
     materials: List[SceneMaterial] = field(default_factory=list)
+    animations: List[SceneAnimation] = field(default_factory=list)
 
     def world_matrix(self, index: int) -> np.ndarray:
         m = np.eye(4)
@@ -57,3 +70,7 @@ class Scene:
             m = node.matrix @ m
             index = node.parent
         return m
+
+    def bind_matrix(self, index: int) -> np.ndarray:
+        node = self.nodes[index]
+        return node.bind if node.bind is not None else self.world_matrix(index)

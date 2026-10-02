@@ -9,6 +9,8 @@ import time
 import traceback
 
 from .disc import Disc
+from .anim import Runtime
+from .rig import make_pool
 from .extract import TEXTURE_FORMATS, Exporter, GameData, detect_game, export_images
 
 
@@ -47,7 +49,16 @@ def cmd_extract(args) -> int:
         t0 = time.time()
         print("Indexing texture pools...")
         game.index_textures()
-        exporter = Exporter(game, out, embed_textures=args.embed, texture_format=args.texture_format)
+        runtime = pool = None
+        if not args.no_skeletons and not args.no_animations:
+            boot, game_dol = disc.read_dol(), disc.read_game_dol()
+            jobs = args.jobs or os.cpu_count() or 1
+            pool = make_pool(boot, game_dol, game.game, jobs)
+            if pool is None:
+                runtime = Runtime(boot, game_dol, game.game)
+        exporter = Exporter(game, out, embed_textures=args.embed, texture_format=args.texture_format,
+                            skeletons=not args.no_skeletons, animations=not args.no_animations,
+                            runtime=runtime, pool=pool)
         failures = 0
         for m in game.iter_models(_filter(args.filter)):
             label = f"{m.archive}/{m.entry}/{m.name}"
@@ -60,6 +71,8 @@ def cmd_extract(args) -> int:
                 print(f"  FAILED {label}: {exc}", file=sys.stderr)
                 if args.verbose:
                     traceback.print_exc()
+        if pool is not None:
+            pool.shutdown()
         images = 0
         if not args.no_images:
             print("Exporting standalone images...")
@@ -69,7 +82,8 @@ def cmd_extract(args) -> int:
             print("Textures not found:")
             for line in sorted(set(exporter.missing)):
                 print(f"  {line}")
-        print(f"Done in {time.time() - t0:.0f}s: {s['models']} models, {s['textures']} textures, "
+        print(f"Done in {time.time() - t0:.0f}s: {s['models']} models ({s['skeletons']} with skeletons, "
+              f"{s['animations']} animations), {s['textures']} textures, "
               f"{images} images, {s['skipped']} empty models skipped, "
               f"{s['missing_textures']} textures not found, {failures} failures")
     return 1 if failures else 0
@@ -97,6 +111,10 @@ def main(argv=None) -> int:
                     help="file format for textures and standalone images (default: png)")
     pe.add_argument("--embed", action="store_true", help="embed textures inside the FBX files")
     pe.add_argument("--no-images", action="store_true", help="skip standalone images (menus, backdrops, fonts)")
+    pe.add_argument("--no-animations", action="store_true", help="export skeletons and skins but no animation clips")
+    pe.add_argument("--no-skeletons", action="store_true", help="export static meshes only (no bones, skins or animation)")
+    pe.add_argument("-j", "--jobs", type=int, default=0,
+                    help="processes for evaluating animations (default: one per CPU core)")
     pe.add_argument("-v", "--verbose", action="store_true")
     pe.set_defaults(func=cmd_extract)
 

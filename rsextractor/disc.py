@@ -6,8 +6,9 @@ file itself, so they read exactly like a regular image.
 from __future__ import annotations
 
 import struct
+import zlib
 from dataclasses import dataclass
-from typing import BinaryIO, Dict, Iterator
+from typing import BinaryIO, Dict, Iterator, Optional
 
 
 @dataclass
@@ -90,6 +91,30 @@ class Disc:
         sizes = struct.unpack_from(">18I", header, 0x90)
         end = max(o + s for o, s in zip(offs, sizes) if s)
         return self._read(self.dol_offset, end)
+
+    def read_game_dol(self) -> Optional[bytes]:
+        """The game's own DOL wrapped inside the boot DOL: stored raw as text
+        section 2 (Rogue Leader) or zlib packed in data section 0 (Rebel Strike,
+        after a ``u32 packed size, u32 unpacked size`` header)."""
+        dol = self.read_dol()
+        offs = struct.unpack_from(">18I", dol, 0)
+        sizes = struct.unpack_from(">18I", dol, 0x90)
+        for i in (2, 7):
+            o, s = offs[i], sizes[i]
+            if not s or o + s > len(dol):
+                continue
+            blob = dol[o:o + s]
+            if i == 7 and len(blob) > 8:
+                packed, unpacked = struct.unpack_from(">II", blob, 0)
+                try:
+                    blob = zlib.decompress(blob[8:8 + packed])
+                except zlib.error:
+                    continue
+                if len(blob) != unpacked:
+                    continue
+            if len(blob) > 0x100 and struct.unpack_from(">I", blob, 0)[0] == 0x100:
+                return blob
+        return None
 
     def close(self) -> None:
         self._f.close()
