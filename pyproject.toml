@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rsextractor"
+version = "0.1.0"
+description = "Extract models and textures from Star Wars Rogue Squadron II and III (GameCube)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.21", "Pillow>=9"]
+
+[project.scripts]
+rsextractor = "rsextractor.cli:main"
+
+[tool.setuptools]
+packages = ["rsextractor"]

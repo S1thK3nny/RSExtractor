@@ -1,0 +1,15 @@
+# Game-derived binaries and reverse-engineering workspaces (copyrighted, never commit)
+work/
+GhidraProject/
+output/
+*.iso
+*.dol
+*.elf
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
