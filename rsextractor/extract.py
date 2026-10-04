@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 
 from .archive import Archive, DataPool, Entry, decompress, parse_package, FOLDER
-from .bump import TILT, channel, emissive, gray, height_to_normal, tilt_to_normal
+from .bump import TILT, channel, emissive, gray, height_to_normal, opaque, tilt_to_normal
 from .disc import Disc
 from .fbx import write_fbx
 from .material import Material, parse_materials
@@ -37,6 +37,9 @@ def save_image(img: np.ndarray, path: str, fmt: str) -> None:
     """Save an RGBA8 array as ``fmt`` (a key of ``TEXTURE_FORMATS``)."""
     Image.fromarray(img, "RGBA").save(path, **TEXTURE_FORMATS[fmt])
 
+
+# GX formats whose alpha is real (IA4, IA8, RGB5A3, RGBA8); CMPR alpha is a 1 bit mask.
+ALPHA_FORMATS = (2, 3, 5, 6)
 
 # RS3 keeps a global table of quantized normals in the boot DOL (data section 4).
 RS3_NORMAL_TABLE_ADDR = 0x80052C00
@@ -465,7 +468,7 @@ class Exporter:
             if mesh.material_index not in mat_map:
                 mat_map[mesh.material_index] = len(scene.materials)
                 mat = materials[mesh.material_index] if mesh.material_index < len(materials) else None
-                scene.materials.append(self._material(mat, mesh.material_index, folder))
+                scene.materials.append(self._material(mat, mesh.material_index, folder, base))
             uvs = [mesh.uvs] + list(mesh.extra_uvs) if mesh.uvs is not None else []
             positions, normals = mesh.positions.astype(np.float64), mesh.normals
             bones = weights = None
@@ -520,42 +523,66 @@ class Exporter:
                                          matrix=np.linalg.inv(parent_frame) @ frames[n]))
         return index
 
-    def _material(self, mat: Optional[Material], index: int, folder: str) -> SceneMaterial:
+    def _material(self, mat: Optional[Material], index: int, folder: str, model: str) -> SceneMaterial:
+        """Scene material; its texture files are named ``<model>_<material>_<sha1 prefix>[_kind]``."""
         if mat is None:
             return SceneMaterial(f"material{index}")
+        name = f"{model}_{mat.name}"
         sm = SceneMaterial(safe_name(mat.name), diffuse=tuple(mat.color0), wrap_u=not mat.clamp_s,
                            wrap_v=not mat.clamp_t)
         if mat.textures:
+            # Keep alpha only where it is transparency; a CMPR color map's 1 bit alpha is
+            # otherwise a mask for another slot (written as its own map below) or unused.
             ref = mat.textures[0]
-            rel = self._texture_file(ref, folder, mat.name)
+            convert, variant = None, ""
+            if mat.opacity is not None:
+                index, alpha = mat.opacity
+                if index != 0 or not alpha:
+                    mask = mat.textures[index]
+                    convert = lambda img: self._set_alpha(img, mask, alpha, name)
+                    variant = f"_alpha{mask.hash.hex()}{alpha:d}"
+            elif ref.format not in ALPHA_FORMATS:
+                convert, variant = opaque, "_opaque"
+            rel = self._texture_file(ref, folder, name, "", convert, variant)
             if rel:
                 sm.texture = rel
-                sm.alpha_texture = ref.format in (2, 3, 5, 6)  # IA4, IA8, RGB5A3, RGBA8
+                sm.alpha_texture = mat.opacity is not None or ref.format in ALPHA_FORMATS
         if mat.bump is not None:
             index, kind, alpha = mat.bump
             ref = mat.textures[index]
             if kind == TILT:
-                sm.normal_map = self._texture_file(ref, folder, mat.name, "normal",
+                sm.normal_map = self._texture_file(ref, folder, name, "normal",
                                                    lambda img: tilt_to_normal(img, self.g.game))
             else:
                 variant = "a" if alpha else "i"
-                self._texture_file(ref, folder, mat.name, "height", lambda img: gray(channel(img, alpha)), variant)
-                sm.normal_map = self._texture_file(ref, folder, mat.name, "normal",
+                self._texture_file(ref, folder, name, "height", lambda img: gray(channel(img, alpha)), variant)
+                sm.normal_map = self._texture_file(ref, folder, name, "normal",
                                                    lambda img: height_to_normal(channel(img, alpha)), variant)
-        if mat.emissive:
-            sm.emissive_map = self._emissive_file(mat, folder)
+        if mat.self_lit is not None:
+            sm.emissive_map = self._emissive_file(mat, folder, name)
         return sm
 
-    def _decode(self, ref, mat_name: str) -> Optional[np.ndarray]:
+    def _set_alpha(self, img: np.ndarray, mask_ref, alpha: bool, name: str) -> np.ndarray:
+        mask = self._decode(mask_ref, name)
+        if mask is None:
+            return img
+        m = channel(mask, alpha)
+        if m.shape != img.shape[:2]:
+            m = np.asarray(Image.fromarray(m, "F").resize((img.shape[1], img.shape[0]), Image.BILINEAR))
+        out = img.copy()
+        out[..., 3] = np.clip(np.rint(m * 255.0), 0, 255).astype(np.uint8)
+        return out
+
+    def _decode(self, ref, name: str) -> Optional[np.ndarray]:
         img = self.g.textures.decode(ref)
         if img is None and ref.hash not in self.missing_hashes:
             self.missing_hashes.add(ref.hash)
             self.stats["missing_textures"] += 1
-            self.missing.append(f"{mat_name} {ref.width}x{ref.height} fmt {ref.format} "
+            self.missing.append(f"{name} {ref.width}x{ref.height} fmt {ref.format} "
                                 f"{ref.hash.hex()[:8]} {'(not in any pool)' if ref.hash not in self.g.textures else ''}")
         return img
 
-    def _texture_file(self, ref, folder: str, mat_name: str, kind: str = "",
+    def _texture_file(self, ref, folder: str, name: str, kind: str = "",
                       convert: Optional[Callable[[np.ndarray], np.ndarray]] = None,
                       variant: str = "") -> Optional[str]:
         """Write the texture (``convert``ed, saved with a ``_kind`` suffix) into ``folder/textures``
@@ -563,32 +590,24 @@ class Exporter:
         suffix = f"_{kind}" if kind else ""
 
         def make() -> Optional[np.ndarray]:
-            img = self._decode(ref, mat_name)
+            img = self._decode(ref, name)
             return img if img is None or convert is None else convert(img)
-        return self._image_file(folder, f"{safe_name(mat_name)}_{ref.hash.hex()[:8]}{suffix}",
+        return self._image_file(folder, f"{safe_name(name)}_{ref.hash.hex()[:8]}{suffix}",
                                 ref.hash.hex() + suffix + variant, kind, make)
 
-    def _emissive_file(self, mat: Material, folder: str) -> Optional[str]:
-        """Color map times its glow and self lit masks (see ``Material.emissive``)."""
+    def _emissive_file(self, mat: Material, folder: str, name: str) -> Optional[str]:
+        """Color map where its self lit mask is 0, black elsewhere."""
         base = mat.textures[0]
-        layers = mat.emissive
-        key = base.hash.hex() + "_emissive" + "".join(
-            f"{mat.textures[i].hash.hex()}{alpha:d}{inverted:d}" for i, alpha, inverted in layers)
+        index, alpha = mat.self_lit
+        mask_ref = mat.textures[index]
+        key = f"{base.hash.hex()}_emissive{mask_ref.hash.hex()}{alpha:d}"
 
         def make() -> Optional[np.ndarray]:
-            masks = []
-            for i, alpha, inverted in layers:
-                img = self._decode(mat.textures[i], mat.name)
-                if img is not None:
-                    m = channel(img, alpha)
-                    masks.append(1.0 - m if inverted else m)
-            if not masks:
+            mask = self._decode(mask_ref, name)
+            if mask is None:
                 return None
-            shape = max((m.shape for m in masks), key=lambda sh: sh[0] * sh[1])
-            masks = [m if m.shape == shape else np.asarray(Image.fromarray(m, "F").resize(shape[::-1]))
-                     for m in masks]
-            return emissive(self._decode(base, mat.name), np.maximum.reduce(masks))
-        return self._image_file(folder, f"{safe_name(mat.name)}_{base.hash.hex()[:8]}_emissive", key,
+            return emissive(self._decode(base, name), 1.0 - channel(mask, alpha))
+        return self._image_file(folder, f"{safe_name(name)}_{base.hash.hex()[:8]}_emissive", key,
                                 "emissive", make)
 
     def _image_file(self, folder: str, stem: str, key: str, kind: str,

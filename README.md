@@ -11,8 +11,9 @@ III: Rebel Strike**, straight from your own disc images.
   (`textures/`), full resolution (including RS3's streamed high-resolution mips).
 * Bump maps → tangent space **normal maps** (`*_normal`, OpenGL convention) linked
   to the FBX materials, height maps also as gray `*_height` images.
-* Glow and self lit masks (engine glows, cockpit lights, windows) → **emissive maps**
-  (`*_emissive`) linked to the FBX materials.
+* Self lit masks (cockpit lights, windows) → **emissive maps** (`*_emissive`) linked
+  to the FBX materials. Color textures keep alpha only where the game uses it as
+  transparency (opacity maps are baked into it); otherwise they are opaque.
 * Standalone images (menus, backdrops, gallery art, HUD, fonts) → PNG or TGA.
 
 ## Requirements
@@ -46,7 +47,10 @@ python -m rsextractor extract rs3.iso --no-skeletons
 ```
 
 Output layout: `output/RS<n>/<archive>/<resource>/<model>.fbx` with the
-model's textures in `.../<resource>/textures/`. Player craft live under
+model's textures in `.../<resource>/textures/`, named
+`<model>_<material>_<sha1 prefix>[_normal|_height|_emissive]`. The discs keep no
+texture names, so the material name (often a Maya default like `phong31`) is the
+best label there is. Player craft live under
 `data/plCraft/...`, level content under `lvlPackNN/...`.
 
 Rebel Strike keeps most level models (walkers, troopers, buildings, props) in
@@ -89,7 +93,7 @@ Units are metres (1 game unit = 1 m), Y up.
 | Static models (all meshes, normals, UVs, vertex colors) | yes | yes |
 | Materials + textures | yes | yes |
 | Bump maps (as normal maps) | yes | yes |
-| Glow / self lit masks (as emissive maps) | yes | yes |
+| Self lit masks (as emissive maps), opacity maps (as alpha) | yes | yes |
 | Standalone images | yes | yes |
 | Articulated models (walkers, troopers, turrets) assembled from their node hierarchy | yes | yes |
 | Skeletons / skin weights in the FBX | yes | yes (capes lie flat as stored; the game simulates cloth) |

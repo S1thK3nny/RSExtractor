@@ -127,16 +127,18 @@ texture's alpha; RS3 swap 1 means a color channel instead of alpha.
 | map | RS2 | RS3 | use |
 |---|---|---|---|
 | color | 0 | 0 | |
-| glow | 1 | 2 | alpha (high = glow) goes to the frame buffer alpha read by the glow pass (RS3 `FUN_7f3cafec`) |
+| opacity | 1 | 2 | output alpha for alpha test (flag `0x4`) or blending (`0x4000`, additive `0x8000`); RS2 only reads it with flag `0x10` and a color map without full alpha (`FUN_7fd3c5ec`), RS3 `FUN_7f3cafec` |
 | self lit | 2 | 3 | `(lighting + K * (1 - alpha)) * color`: alpha 0 shines (RS2 `FUN_7fd35a3c`, `FUN_7fd37098`) |
 | bump | 3, 4 and 5 | 4 | see below |
 
 RS2 picks the shader from a table at `0x7fdd96a0` indexed by the material type
 (`FUN_7fd34f94`), e.g. type 8 cockpit, 24 emboss, 27 emboss + environment map
-(player craft hulls). A map naming the color texture reads its alpha, so CMPR
-color maps carry 1 bit masks: hulls emboss their panel grooves (alpha 0),
-cockpits light their screens and buttons (alpha 0). Neither game stores texture
-names: materials keep the Maya shader name (`phong31`), textures only a SHA-1.
+(player craft hulls). A map naming the color texture reads its alpha, so the 1
+bit alpha of a CMPR color map is a mask whose meaning depends on the slot: cut out
+or blended transparency (trees, engine glow sprites), lit screens and buttons
+(alpha 0) or emboss grooves (alpha 0, hulls). Without such a slot the game draws
+the texture opaque and ignores its alpha. Neither game stores texture names:
+materials keep the Maya shader name (`phong31`), textures only a SHA-1.
 
 ### Bump maps
 
@@ -166,8 +168,10 @@ raised). The game scales both kinds with per level constants.
 The extractor turns every bump map into an OpenGL convention normal map
 (`normalize(tilt_u, tilt_v, 1)`, so a full tilt is 45 degrees; height maps lean
 by 2 x the height difference per texel) and writes the height channel as a gray
-`*_height` image. Glow and self lit masks become one `*_emissive` image (color x
-glow alpha, max color x (1 - self lit alpha)).
+`*_height` image. Self lit masks become an `*_emissive` image (color x (1 - mask)).
+The color image keeps alpha only as transparency: the opacity map (resized into
+the alpha channel when it is its own texture), or the texture's own alpha for
+IA4, IA8, RGB5A3 and RGBA8. Other color maps are written opaque.
 
 ## Textures
 

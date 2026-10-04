@@ -17,14 +17,15 @@ Layout (RS2 FUN_7fd2c3c8)::
 
     map type      RS2      RS3      shader (RS2 table 0x7fdd96a0 by material type)
     color         0        0
-    glow          1        2        alpha (high = glow) into the frame buffer's glow pass
+    opacity       1        2        output alpha for alpha test (flag 0x4) or blending
+                                    (0x4000, additive 0x8000); RS2 FUN_7fd3c5ec, RS3 FUN_7f3cafec
     self lit      2        3        lit + K * (1 - alpha): alpha 0 shines (FUN_7fd35a3c, FUN_7fd37098)
     bump tilt     3, 4     4 CMPR   indirect normal offsets (FUN_7f3d074c)
     bump height   5        4        emboss (FUN_7fd3767c, FUN_7fd37f70, FUN_7f3cdf28)
 
-    A map naming the color texture reads its alpha, so CMPR color maps carry 1 bit
-    masks: craft hulls (types 27, RS3 slot 4) emboss their panel grooves (alpha 0),
-    cockpits light their screens (alpha 0).
+    A map naming the color texture reads its alpha, so the 1 bit alpha of a CMPR
+    color map is a mask whose meaning depends on the slot: transparency, lit screens
+    (alpha 0) or emboss grooves (alpha 0, craft hulls). Without such a slot it is unused.
 
 Flags 0x400 / 0x800 select clamped addressing in S / T (wrap otherwise).
 """
@@ -37,7 +38,7 @@ from typing import List, Optional, Tuple
 from .bump import HEIGHT, TILT
 
 # map type -> slot per game
-GLOW = {2: 1, 3: 2}
+OPACITY = {2: 1, 3: 2}
 SELF_LIT = {2: 2, 3: 3}
 
 CMPR = 14
@@ -87,15 +88,19 @@ class Material:
             return i, TILT, False
         return i, HEIGHT, self.reads_alpha(4)
 
+    def _map(self, slots: dict) -> Optional[Tuple[int, bool]]:
+        n = slots[self.game]
+        return (self.slot(n), self.reads_alpha(n)) if self.slot(n) >= 0 else None
+
     @property
-    def emissive(self) -> List[Tuple[int, bool, bool]]:
-        """Masks that make the color map shine: (texture index, read alpha, inverted)."""
-        out = []
-        for slots, inverted in ((GLOW, False), (SELF_LIT, True)):
-            n = slots[self.game]
-            if self.slot(n) >= 0:
-                out.append((self.slot(n), self.reads_alpha(n), inverted))
-        return out
+    def opacity(self) -> Optional[Tuple[int, bool]]:
+        """(texture index, read alpha) of the map that makes the material see through."""
+        return self._map(OPACITY)
+
+    @property
+    def self_lit(self) -> Optional[Tuple[int, bool]]:
+        """(texture index, read alpha) of the mask whose 0 values make the color map shine."""
+        return self._map(SELF_LIT)
 
     @property
     def clamp_s(self) -> bool:

@@ -1,4 +1,4 @@
-"""Bump maps -> tangent space normal maps, glow masks -> emissive maps.
+"""Bump maps -> tangent space normal maps, self lit masks -> emissive maps.
 
 Both games bump map in two ways (see docs/FORMATS.md, "Bump maps"):
 
@@ -56,6 +56,12 @@ def gray(values: np.ndarray) -> np.ndarray:
     """Opaque RGBA8 image of values in [0, 1]."""
     v = np.clip(np.rint(values * 255.0), 0, 255).astype(np.uint8)
     return np.stack([v, v, v, np.full_like(v, 255)], -1)
+
+
+def opaque(img: np.ndarray) -> np.ndarray:
+    out = img.copy()
+    out[..., 3] = 255
+    return out
 
 
 def height_to_normal(h: np.ndarray) -> np.ndarray:
