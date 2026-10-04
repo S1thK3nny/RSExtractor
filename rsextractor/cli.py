@@ -83,7 +83,7 @@ def cmd_extract(args) -> int:
             for line in sorted(set(exporter.missing)):
                 print(f"  {line}")
         print(f"Done in {time.time() - t0:.0f}s: {s['models']} models ({s['skeletons']} with skeletons, "
-              f"{s['animations']} animations), {s['textures']} textures, "
+              f"{s['animations']} animations), {s['textures']} textures, {s['normal_maps']} normal maps, {s['emissive_maps']} emissive maps, "
               f"{images} images, {s['skipped']} empty models skipped, "
               f"{s['missing_textures']} textures not found, {failures} failures")
     return 1 if failures else 0

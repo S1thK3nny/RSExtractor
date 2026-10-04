@@ -256,6 +256,44 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
 
     # --- materials & textures
     out_dir = os.path.dirname(os.path.abspath(path))
+
+    def add_texture(mat, rel: str, suffix: str, alpha: bool) -> int:
+        """Video + Texture objects for one image file; returns the texture id."""
+        rel = rel.replace("\\", "/")
+        absolute = os.path.normpath(os.path.join(out_dir, rel))
+        video_name, tex_name = _name(mat.name + suffix, "Video"), _name(mat.name + suffix, "Texture")
+        vid = ids()
+        video = objects.add("Video", L(vid), S(video_name), S("Clip"))
+        video.add("Type", S("Clip"))
+        vp = video.add("Properties70")
+        _p70(vp, "Path", "KString", "XRefUrl", "", absolute)
+        video.add("UseMipMap", I(0))
+        video.add("Filename", S(absolute))
+        video.add("RelativeFilename", S(rel))
+        if embed_textures and os.path.exists(absolute):
+            with open(absolute, "rb") as f:
+                video.add("Content", Prop("R", f.read()))
+        count("Video")
+        tid = ids()
+        tex = objects.add("Texture", L(tid), S(tex_name), S(""))
+        tex.add("Type", S("TextureVideoClip"))
+        tex.add("Version", I(202))
+        tex.add("TextureName", S(tex_name))
+        tp = tex.add("Properties70")
+        _p70(tp, "UseMaterial", "bool", "", "", 1)
+        _p70(tp, "WrapModeU", "enum", "", "", 0 if mat.wrap_u else 1)
+        _p70(tp, "WrapModeV", "enum", "", "", 0 if mat.wrap_v else 1)
+        tex.add("Media", S(video_name))
+        tex.add("FileName", S(absolute))
+        tex.add("RelativeFilename", S(rel))
+        tex.add("ModelUVTranslation", D(0.0), D(0.0))
+        tex.add("ModelUVScaling", D(1.0), D(1.0))
+        tex.add("Texture_Alpha_Source", S("Alpha_Black" if alpha else "None"))
+        tex.add("Cropping", I(0), I(0), I(0), I(0))
+        count("Texture")
+        connect("OO", vid, tid)
+        return tid
+
     material_ids: List[int] = []
     for mat in scene.materials:
         mid = ids()
@@ -273,44 +311,20 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
         opacity = float(mat.diffuse[3]) if len(mat.diffuse) > 3 else 1.0
         _p70(mp, "Opacity", "double", "Number", "", opacity)
         _p70(mp, "TransparencyFactor", "Number", "", "A", 1.0 - opacity)
+        if mat.emissive_map:
+            _p70(mp, "EmissiveColor", "Color", "", "A", 1.0, 1.0, 1.0)
+            _p70(mp, "EmissiveFactor", "Number", "", "A", 1.0)
         count("Material")
         material_ids.append(mid)
         if mat.texture:
-            rel = mat.texture.replace("\\", "/")
-            absolute = os.path.normpath(os.path.join(out_dir, rel))
-            vid = ids()
-            video = objects.add("Video", L(vid), S(_name(mat.name, "Video")), S("Clip"))
-            video.add("Type", S("Clip"))
-            vp = video.add("Properties70")
-            _p70(vp, "Path", "KString", "XRefUrl", "", absolute)
-            video.add("UseMipMap", I(0))
-            video.add("Filename", S(absolute))
-            video.add("RelativeFilename", S(rel))
-            if embed_textures and os.path.exists(absolute):
-                with open(absolute, "rb") as f:
-                    video.add("Content", Prop("R", f.read()))
-            count("Video")
-            tid = ids()
-            tex = objects.add("Texture", L(tid), S(_name(mat.name, "Texture")), S(""))
-            tex.add("Type", S("TextureVideoClip"))
-            tex.add("Version", I(202))
-            tex.add("TextureName", S(_name(mat.name, "Texture")))
-            tp = tex.add("Properties70")
-            _p70(tp, "UseMaterial", "bool", "", "", 1)
-            _p70(tp, "WrapModeU", "enum", "", "", 0 if mat.wrap_u else 1)
-            _p70(tp, "WrapModeV", "enum", "", "", 0 if mat.wrap_v else 1)
-            tex.add("Media", S(_name(mat.name, "Video")))
-            tex.add("FileName", S(absolute))
-            tex.add("RelativeFilename", S(rel))
-            tex.add("ModelUVTranslation", D(0.0), D(0.0))
-            tex.add("ModelUVScaling", D(1.0), D(1.0))
-            tex.add("Texture_Alpha_Source", S("Alpha_Black" if mat.alpha_texture else "None"))
-            tex.add("Cropping", I(0), I(0), I(0), I(0))
-            count("Texture")
-            connect("OO", vid, tid)
+            tid = add_texture(mat, mat.texture, "", mat.alpha_texture)
             connect("OP", tid, mid, "DiffuseColor")
             if mat.alpha_texture:
                 connect("OP", tid, mid, "TransparentColor")
+        if mat.normal_map:
+            connect("OP", add_texture(mat, mat.normal_map, "_normal", False), mid, "NormalMap")
+        if mat.emissive_map:
+            connect("OP", add_texture(mat, mat.emissive_map, "_emissive", False), mid, "EmissiveColor")
 
     # --- meshes
     pose_entries: List[Tuple[int, np.ndarray]] = []

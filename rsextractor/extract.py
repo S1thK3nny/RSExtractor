@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image
 
 from .archive import Archive, DataPool, Entry, decompress, parse_package, FOLDER
+from .bump import TILT, channel, emissive, gray, height_to_normal, tilt_to_normal
 from .disc import Disc
 from .fbx import write_fbx
 from .material import Material, parse_materials
@@ -406,9 +407,11 @@ class Exporter:
         self.pool = pool
         self.log = log
         self.written_textures: Dict[str, str] = {}
-        self.stats = {"models": 0, "skipped": 0, "textures": 0, "missing_textures": 0,
+        self.stats = {"models": 0, "skipped": 0, "textures": 0, "normal_maps": 0, "emissive_maps": 0,
+                      "missing_textures": 0,
                       "skeletons": 0, "animations": 0}
         self.missing: List[str] = []
+        self.missing_hashes: set = set()
 
     def model_dir(self, m: ModelParts) -> str:
         parts = [safe_name(p) for p in m.entry.split("/")]
@@ -528,28 +531,83 @@ class Exporter:
             if rel:
                 sm.texture = rel
                 sm.alpha_texture = ref.format in (2, 3, 5, 6)  # IA4, IA8, RGB5A3, RGBA8
+        if mat.bump is not None:
+            index, kind, alpha = mat.bump
+            ref = mat.textures[index]
+            if kind == TILT:
+                sm.normal_map = self._texture_file(ref, folder, mat.name, "normal",
+                                                   lambda img: tilt_to_normal(img, self.g.game))
+            else:
+                variant = "a" if alpha else "i"
+                self._texture_file(ref, folder, mat.name, "height", lambda img: gray(channel(img, alpha)), variant)
+                sm.normal_map = self._texture_file(ref, folder, mat.name, "normal",
+                                                   lambda img: height_to_normal(channel(img, alpha)), variant)
+        if mat.emissive:
+            sm.emissive_map = self._emissive_file(mat, folder)
         return sm
 
-    def _texture_file(self, ref, folder: str, mat_name: str) -> Optional[str]:
-        """Write the texture into ``folder/textures`` and return its relative path."""
-        fname = f"{safe_name(mat_name)}_{ref.hash.hex()[:8]}.{self.texture_format}"
+    def _decode(self, ref, mat_name: str) -> Optional[np.ndarray]:
+        img = self.g.textures.decode(ref)
+        if img is None and ref.hash not in self.missing_hashes:
+            self.missing_hashes.add(ref.hash)
+            self.stats["missing_textures"] += 1
+            self.missing.append(f"{mat_name} {ref.width}x{ref.height} fmt {ref.format} "
+                                f"{ref.hash.hex()[:8]} {'(not in any pool)' if ref.hash not in self.g.textures else ''}")
+        return img
+
+    def _texture_file(self, ref, folder: str, mat_name: str, kind: str = "",
+                      convert: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+                      variant: str = "") -> Optional[str]:
+        """Write the texture (``convert``ed, saved with a ``_kind`` suffix) into ``folder/textures``
+        and return its relative path. ``variant`` tells apart conversions with the same kind."""
+        suffix = f"_{kind}" if kind else ""
+
+        def make() -> Optional[np.ndarray]:
+            img = self._decode(ref, mat_name)
+            return img if img is None or convert is None else convert(img)
+        return self._image_file(folder, f"{safe_name(mat_name)}_{ref.hash.hex()[:8]}{suffix}",
+                                ref.hash.hex() + suffix + variant, kind, make)
+
+    def _emissive_file(self, mat: Material, folder: str) -> Optional[str]:
+        """Color map times its glow and self lit masks (see ``Material.emissive``)."""
+        base = mat.textures[0]
+        layers = mat.emissive
+        key = base.hash.hex() + "_emissive" + "".join(
+            f"{mat.textures[i].hash.hex()}{alpha:d}{inverted:d}" for i, alpha, inverted in layers)
+
+        def make() -> Optional[np.ndarray]:
+            masks = []
+            for i, alpha, inverted in layers:
+                img = self._decode(mat.textures[i], mat.name)
+                if img is not None:
+                    m = channel(img, alpha)
+                    masks.append(1.0 - m if inverted else m)
+            if not masks:
+                return None
+            shape = max((m.shape for m in masks), key=lambda sh: sh[0] * sh[1])
+            masks = [m if m.shape == shape else np.asarray(Image.fromarray(m, "F").resize(shape[::-1]))
+                     for m in masks]
+            return emissive(self._decode(base, mat.name), np.maximum.reduce(masks))
+        return self._image_file(folder, f"{safe_name(mat.name)}_{base.hash.hex()[:8]}_emissive", key,
+                                "emissive", make)
+
+    def _image_file(self, folder: str, stem: str, key: str, kind: str,
+                    make: Callable[[], Optional[np.ndarray]]) -> Optional[str]:
+        """Write ``make()`` as ``folder/textures/stem`` once per ``key`` (later uses copy the file)."""
+        fname = f"{stem}.{self.texture_format}"
         rel = f"textures/{fname}"
         target = os.path.join(folder, "textures", fname)
         if os.path.exists(target):
             return rel
-        key = ref.hash.hex()
         if key not in self.written_textures:
-            img = self.g.textures.decode(ref)
+            img = make()
             if img is None:
-                self.stats["missing_textures"] += 1
-                self.missing.append(f"{mat_name} {ref.width}x{ref.height} fmt {ref.format} "
-                                    f"{ref.hash.hex()[:8]} {'(not in any pool)' if ref.hash not in self.g.textures else ''}")
                 self.written_textures[key] = ""
                 return None
             os.makedirs(os.path.dirname(target), exist_ok=True)
             save_image(img, target, self.texture_format)
             self.written_textures[key] = target
-            self.stats["textures"] += 1
+            self.stats[{"normal": "normal_maps", "emissive": "emissive_maps"}.get(kind, "textures")] += 1
             return rel
         source = self.written_textures[key]
         if not source:

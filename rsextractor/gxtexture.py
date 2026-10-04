@@ -70,9 +70,13 @@ def _decode_cmpr(data: bytes, width: int, height: int) -> np.ndarray:
     c1 = (sub[:, 2].astype(np.uint16) << 8) | sub[:, 3]
     p0 = _rgb565(c0).astype(np.int32)
     p1 = _rgb565(c1).astype(np.int32)
+    # The GameCube differs from DXT1 (as decoded by Dolphin): the in between colors blend
+    # 5/8 + 3/8, and the transparent entry of 3 color blocks keeps the average color.
+    # Factor 5 relies on that color under alpha masks (cockpit screens, hull grooves).
     four = (c0 > c1)[:, None]
-    p2 = np.where(four, (2 * p0 + p1) // 3, (p0 + p1) // 2)
-    p3 = np.where(four, (p0 + 2 * p1) // 3, 0)
+    avg = (p0 + p1) // 2
+    p2 = np.where(four, (5 * p0 + 3 * p1) >> 3, avg)
+    p3 = np.where(four, (3 * p0 + 5 * p1) >> 3, avg)
     rgb = np.stack([p0, p1, p2, p3], 1)  # (N, 4, 3)
     alpha = np.full((len(sub), 4, 1), 255, np.int32)
     alpha[:, 3, 0] = np.where(four[:, 0], 255, 0)

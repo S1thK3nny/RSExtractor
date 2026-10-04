@@ -11,7 +11,20 @@ Layout (RS2 FUN_7fd2c3c8)::
         +0x00 u16 width, +0x02 u16 height, +0x04 u8 mip count, +0x05 u8 GX format
         (RS3 tags one CMPR texture, the Bespin sky, as 15)
         RS2 +0x14 / RS3 +0x34: SHA-1 of the texture (key into the texture pools)
-    RS2 +0x104: six u16 slots mapping map types to texture indices (0xFF = unused)
+    map slots, texture index per map type (0xFF = unused):
+        RS2 +0x104: six {u8 texture, u8 mode}  (mode 3: the map is the texture's alpha)
+        RS3 +0x10C: five {u8 texture, u8 swap, u16}  (swap 1: a color channel, not alpha)
+
+    map type      RS2      RS3      shader (RS2 table 0x7fdd96a0 by material type)
+    color         0        0
+    glow          1        2        alpha (high = glow) into the frame buffer's glow pass
+    self lit      2        3        lit + K * (1 - alpha): alpha 0 shines (FUN_7fd35a3c, FUN_7fd37098)
+    bump tilt     3, 4     4 CMPR   indirect normal offsets (FUN_7f3d074c)
+    bump height   5        4        emboss (FUN_7fd3767c, FUN_7fd37f70, FUN_7f3cdf28)
+
+    A map naming the color texture reads its alpha, so CMPR color maps carry 1 bit
+    masks: craft hulls (types 27, RS3 slot 4) emboss their panel grooves (alpha 0),
+    cockpits light their screens (alpha 0).
 
 Flags 0x400 / 0x800 select clamped addressing in S / T (wrap otherwise).
 """
@@ -19,7 +32,13 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional, Tuple
+
+from .bump import HEIGHT, TILT
+
+# map type -> slot per game
+GLOW = {2: 1, 3: 2}
+SELF_LIT = {2: 2, 3: 3}
 
 CMPR = 14
 FORMAT_ALIASES = {15: CMPR}  # data laid out exactly as GX CMPR
@@ -41,6 +60,42 @@ class Material:
     color0: tuple
     color1: tuple
     textures: List[TextureRef] = field(default_factory=list)
+    slots: List[int] = field(default_factory=list)  # texture index per map type, -1 = unused
+    slot_modes: List[int] = field(default_factory=list)  # RS2 mode / RS3 swap byte per slot
+    game: int = 2
+
+    def slot(self, n: int) -> int:
+        i = self.slots[n] if n < len(self.slots) else -1
+        return i if 0 <= i < len(self.textures) else -1
+
+    def reads_alpha(self, n: int) -> bool:
+        """Whether slot ``n`` uses its texture's alpha (else its color, as intensity)."""
+        mode = self.slot_modes[n] if n < len(self.slot_modes) else 0
+        return mode == 3 or self.textures[self.slot(n)].format in (0, 1) if self.game == 2 else mode != 1
+
+    @property
+    def bump(self) -> Optional[Tuple[int, str, bool]]:
+        """(texture index, ``TILT`` or ``HEIGHT``, height read from alpha) of the bump map."""
+        if self.game == 2:
+            if self.slot(3) >= 0:
+                return self.slot(3), TILT, False
+            return (self.slot(5), HEIGHT, self.reads_alpha(5)) if self.slot(5) >= 0 else None
+        i = self.slot(4)
+        if i < 0:
+            return None
+        if i > 0 and self.textures[i].format == CMPR:
+            return i, TILT, False
+        return i, HEIGHT, self.reads_alpha(4)
+
+    @property
+    def emissive(self) -> List[Tuple[int, bool, bool]]:
+        """Masks that make the color map shine: (texture index, read alpha, inverted)."""
+        out = []
+        for slots, inverted in ((GLOW, False), (SELF_LIT, True)):
+            n = slots[self.game]
+            if self.slot(n) >= 0:
+                out.append((self.slot(n), self.reads_alpha(n), inverted))
+        return out
 
     @property
     def clamp_s(self) -> bool:
@@ -61,6 +116,7 @@ def parse_materials(si: bytes, game: int = 2) -> List[Material]:
     count = struct.unpack_from(">I", si, 4)[0]
     size, rec, hash_off = (0x110, 0x34, 0x14) if game == 2 else (0x120, 0x48, 0x34)
     color_off = 0x18 if game == 2 else 0x1C
+    slot_off, slot_size, nslots = (0x104, 2, 6) if game == 2 else (0x10C, 4, 5)
     out: List[Material] = []
     for i in range(count):
         base = 8 + i * size
@@ -77,6 +133,8 @@ def parse_materials(si: bytes, game: int = 2) -> List[Material]:
             w, h, mips, fmt = struct.unpack_from(">HHBB", si, r)
             textures.append(TextureRef(w, h, mips, FORMAT_ALIASES.get(fmt, fmt),
                                        si[r + hash_off:r + hash_off + 20]))
+        slots = [si[base + slot_off + k * slot_size] for k in range(nslots)]
+        modes = [si[base + slot_off + k * slot_size + 1] for k in range(nslots)]
         out.append(Material(name, mtype, flags, _rgba(si, base + color_off), _rgba(si, base + color_off + 4),
-                            textures))
+                            textures, [-1 if t == 0xFF else t for t in slots], modes, game))
     return out

@@ -117,13 +117,68 @@ type, flags (`0x400`/`0x800` = clamp S/T), two RGBA colors, texture count at
 +0x30 (u32 RS2, u8 RS3), texture records at +0x34 of 0x34 (RS2) / 0x48 (RS3)
 bytes: `u16 width, u16 height, u8 mips, u8 GX format`, SHA-1 at +0x14 (RS2) /
 +0x34 (RS3). RS3 tags one CMPR texture (the Bespin sky) as format 15; its data is
-plain CMPR. A second texture record is usually a bump map.
+plain CMPR.
+
+Map slots after the texture records give the texture index used for each map
+type (`0xFF` = unused): RS2 six `{u8 texture, u8 mode}` at +0x104, RS3 five
+`{u8 texture, u8 swap, u16}` at +0x10C. RS2 mode 3 means the map is the
+texture's alpha; RS3 swap 1 means a color channel instead of alpha.
+
+| map | RS2 | RS3 | use |
+|---|---|---|---|
+| color | 0 | 0 | |
+| glow | 1 | 2 | alpha (high = glow) goes to the frame buffer alpha read by the glow pass (RS3 `FUN_7f3cafec`) |
+| self lit | 2 | 3 | `(lighting + K * (1 - alpha)) * color`: alpha 0 shines (RS2 `FUN_7fd35a3c`, `FUN_7fd37098`) |
+| bump | 3, 4 and 5 | 4 | see below |
+
+RS2 picks the shader from a table at `0x7fdd96a0` indexed by the material type
+(`FUN_7fd34f94`), e.g. type 8 cockpit, 24 emboss, 27 emboss + environment map
+(player craft hulls). A map naming the color texture reads its alpha, so CMPR
+color maps carry 1 bit masks: hulls emboss their panel grooves (alpha 0),
+cockpits light their screens and buttons (alpha 0). Neither game stores texture
+names: materials keep the Maya shader name (`phong31`), textures only a SHA-1.
+
+### Bump maps
+
+Both games bump map in two ways, picked by the slot:
+
+| | tilt map (indirect) | height map (emboss) |
+|---|---|---|
+| RS2 | slots 3 and 4 (modes 0, 1), IA4 | slot 5, I4 or the color map |
+| RS3 | slot 4, CMPR | slot 4, I4/IA4 or the color map |
+
+Emboss (RS2 `FUN_7fd3767c`, RS3 `FUN_7f3cdf28`) samples the height map at the
+UV and at a `GX_TG_BUMP*` light shifted UV and subtracts them; material flag
+`0x1000` (RS2) / `0x2000` (RS3) swaps the two. Player craft emboss the 1 bit
+alpha of their color map this way (type 27 `FUN_7fd37f70` reads TEXA).
+
+Tilt maps (RS3 `FUN_7f3d074c`) are read as an indirect texture with dynamic S/T
+matrices that scale texture coordinates generated from the vertex tangent and
+binormal; the offsets are added to the normal lookup into the light map. Two
+channels hold how far the normal leans towards +u and +v of the first UV set,
+zero at 127.5, i.e. the X and Y of a tangent space normal map without Z (about 2%
+of texels lie outside the unit circle, so they are offsets, not unit vectors):
+RS2 IA4 intensity = +u, alpha = down the image (-v); RS3 CMPR red (= blue) = +u,
+green = +v (up the image). Axes and relative signs follow from the maps being
+curl free, the overall sign from integrating them (noses and rivets come out
+raised). The game scales both kinds with per level constants.
+
+The extractor turns every bump map into an OpenGL convention normal map
+(`normalize(tilt_u, tilt_v, 1)`, so a full tilt is 45 degrees; height maps lean
+by 2 x the height difference per texel) and writes the height channel as a gray
+`*_height` image. Glow and self lit masks become one `*_emissive` image (color x
+glow alpha, max color x (1 - self lit alpha)).
 
 ## Textures
 
 `SMMJ` index: `"SMMJ", u32 count`, entries `{sha1[20], u32 offset}` (RS2, bytes)
 or `{sha1[20], u32 offset/32, u8 missing_top_mips, u8, u16}` (RS3). Data is the
 GX mip chain in the matching `_tpd`.
+
+CMPR is decoded as the GameCube does (and Dolphin), not as DXT1: the two in
+between colors blend 5/8 + 3/8, and the transparent entry of a 3 color block keeps
+the average color instead of black. The game relies on that color under its alpha
+masks.
 
 RS2 offsets carry a level count in their top bits: with `n = offset >> 25` the
 texture is a lower mip of a larger texture in the same pool, so its data starts

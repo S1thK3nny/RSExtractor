@@ -25,6 +25,8 @@ class SceneMaterial:
     shininess: float = 0.0
     texture: Optional[str] = None       # path relative to the exported file
     alpha_texture: bool = False         # texture carries meaningful alpha
+    normal_map: Optional[str] = None    # tangent space (OpenGL) normal map, relative path
+    emissive_map: Optional[str] = None  # emitted color, relative path
     double_sided: bool = False
     wrap_u: bool = True
     wrap_v: bool = True
