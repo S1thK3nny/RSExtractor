@@ -53,9 +53,54 @@ set for every character whose `_su` channel count matches the clips' curve count
 (69 for troopers and officers, 57 for Ewoks, Jawas and Ugnaughts, 171 for Han).
 The same name can stand for different packages in different levels (`tile05`).
 
+Besides models and clips the pool holds three more part types (counts for
+the US disc):
+
+* `X_cs` (255, in cutscene packages): the cast of a cutscene. `u32 strings,
+  u32, u32, u32 count, u32 actor offsets[count]`, actors of 0x2C bytes `{u32
+  locator, u32 variant ("default"), u32, u32 model, u32 clip, u32 flags, f32,
+  f32, u32 matrix, u32, u32}` whose names are offsets into the string table at
+  `strings`: the locator of the cutscene's own rig (`characterlukeik`), the
+  model to place there (`LS_PLY_Farmboy`, any model of the level or pool) and
+  the clip it plays (`luke_dance`), which the cutscene package carries. 115 of
+  the 370 clips in cutscene packages belong to such actors, not to the
+  cutscene's own rig.
+* `X_aw` (16, player and wingman characters, Yoda): `u32 joints, u32
+  transforms, f32 weight[joints], f32 weight[transforms]`, values 0, 0.2, 0.4
+  and 1 per node, likely the weights of an aiming or upper body layer.
+* `t###_v_lm` (136): building placement on a city tile, 3x4 matrices (0x30
+  bytes) with a translation and a yaw of whole quarter turns (`FUN_7f35c620`
+  counts them; the scale of `_1_lm` copies is ignored, only `t###_0_lm` is
+  read, `FUN_7f35c388`). See "Tile maps".
+
 A model named `X` consists of `X_su` (setup), `X_ge` (geometry), `X_si`
 (materials), optional `X_an` (animation), `X_cl` (collision) and, in RS3, `X_nm`
 (names). Texture pools are `*_tpi` + `*_tpd`.
+
+## Tile maps
+
+Several RS3 levels are built from square tiles on a grid (Death Star surface
+and trench, Executor hull, Fondor, the Academy, Ralltiir, Bespin's city; RS3
+`FUN_7f35cfb0` sets it up). The level package holds `tmap` and `bmap` and
+references packages `tile##` and `bldg##` in `bData.pool` with tile models
+`t###_v` and building models `b###_v` (`v` = level of detail, 0 = full).
+
+`tmap`: `u16, u16 grids, u16, u16 tile types`, then grids of 0x154 bytes:
+
+```
++0x00 f32 origin[3]      +0x0C f32 axis_u[3]    +0x18 f32 axis_v[3]
++0x24 f32 cell size[3]   (x and z used: 420 Bespin/Ralltiir, 128 Academy, 100 Death Star)
++0x30 u32 width, u32 height, u32 cells (offset from the grid record)
+cells: u8[width * height], row major (index = column + row * width)
+       0x1F = empty, else bits 0-4 tile type, bits 6-7 quarter turns
+```
+
+A tile is drawn at `origin + column * size.x * axis_u + row * size.z * axis_v`
+(its centre; tiles span -size/2 .. size/2), rotated about Y by its quarter
+turns: one turn maps +X to -Z and +Z to +X (`FUN_7f35c8ec` precomputes the four
+matrices, `FUN_7f35def0` draws). `bmap` has one 0x24 byte record per tile type,
+`{u32 count, u32 building[8]}` (building type in the low half), and the tile's
+`t###_0_lm` gives the matrix of each building relative to the tile.
 
 ## Geometry `_ge`
 
@@ -113,7 +158,9 @@ Display lists are standard GX (`0x98` strips, `0x90` triangles, `0xA0` fans, `0x
 ## Materials `_si` ("ABME")
 
 `"ABME", u32 count`, then materials of 0x110 (RS2) / 0x120 (RS3) bytes: name[16],
-type, flags (`0x400`/`0x800` = clamp S/T), two RGBA colors, texture count at
+type, flags (`0x400`/`0x800` = clamp S/T), diffuse and specular RGBA (RS2 +0x18,
++0x1C; RS3 +0x1C, +0x20), shininess (f32, RS2 +0x20, RS3 +0x24), reflectivity
+(RS2 f32 +0x24, RS3 u8 +0x2D / 255), texture count at
 +0x30 (u32 RS2, u8 RS3), texture records at +0x34 of 0x34 (RS2) / 0x48 (RS3)
 bytes: `u16 width, u16 height, u8 mips, u8 GX format`, SHA-1 at +0x14 (RS2) /
 +0x34 (RS3). RS3 tags one CMPR texture (the Bespin sky) as format 15; its data is
@@ -132,13 +179,52 @@ texture's alpha; RS3 swap 1 means a color channel instead of alpha.
 | bump | 3, 4 and 5 | 4 | see below |
 
 RS2 picks the shader from a table at `0x7fdd96a0` indexed by the material type
-(`FUN_7fd34f94`), e.g. type 8 cockpit, 24 emboss, 27 emboss + environment map
-(player craft hulls). A map naming the color texture reads its alpha, so the 1
+(`FUN_7fd34f94`), e.g. type 8 cockpit, 24 emboss, 27 emboss + highlight (player
+craft hulls). RS3 types are bit sets (`0x80000000 | bits`) that `FUN_7f3d6430`
+maps to the same shader numbers (bit 0 lit, 2 textured, 3 masked highlight,
+1 self lit, 5 tilt bump, 6 emboss; flag `0x100` picks 28-33, `0x4000` 26/27);
+its shader table is at `0x7f672aa8`. A map naming the color texture reads its alpha, so the 1
 bit alpha of a CMPR color map is a mask whose meaning depends on the slot: cut out
 or blended transparency (trees, engine glow sprites), lit screens and buttons
 (alpha 0) or emboss grooves (alpha 0, hulls). Without such a slot the game draws
 the texture opaque and ignores its alpha. Neither game stores texture names:
 materials keep the Maya shader name (`phong31`), textures only a SHA-1.
+
+### Highlights and reflections
+
+Shaders 4-13, 16-23, 27 and RS3 30-37 add a highlight (all materials with a
+shininess above 0). A second texture coordinate is the view space normal turned
+towards the half vector of the main light and scaled by `0.2 + 3.8 *
+clamp(shininess)` (RS2 `FUN_7fd2f7f0`, RS3 `FUN_7f3c2b74`; constants in the
+boot DOL's small data, RS2 `r2 = 0x8009EA20`). It samples a highlight texture
+(RS2 `envmap/hilite`, 128x128 IA4, alpha falling linearly from the centre to
+the edge), so the highlight is `1 - k * sin(angle)`, tinted by the specular
+color. Shaders 6, 8, 17, 19, 27, 31, 33 (and their reflective forms) multiply it
+by `clamp(4 * (green - 0.25))` of the color map: TEV swap table 1 is set to
+`(R, G, B, G)` (`FUN_7fd34898`) and these stages read the color texture's
+"alpha" through it.
+
+Shaders 4-8, 16-19 and RS3 30-33 switch to a reflective variant (+5, +4, +4;
+tables RS2 `0x7fdd89d8`, RS3 `0x7f67259c`) when the reflectivity is above 0.05
+(RS2) or at least 20/255 (RS3). The variant samples the environment sphere map
+with the normal (post matrix `0x43`) and lights the color map with
+`lerp(lighting, environment, reflectivity)` (`C0.alpha = 255 * reflectivity`,
+`FUN_7fd3c594`), i.e. like a metal of that metalness. The extractor writes the
+reflectivity as the FBX `ReflectionFactor`, the specular color with
+`SpecularFactor` 1 and a Blinn-Phong exponent with the same half width as the
+game's highlight; masked highlights become a `*_specular` map (mask x color).
+
+### Environment cubes
+
+Each level package carries the cube its reflections show, six standalone images
+`extra/envMap/{rgt,lft,top,bot,frt,bck}` (RS2 front end and briefing
+`envMap/...`; RS2 also has loose `data/envmap/<name>/...` sets, the fallback
+being `envmap/bespin`). The game renders the cube onto a tessellated sphere into
+a sphere map texture (RS2 `FUN_7fd2ad30`, RS3 `FUN_7f3b58d4`). The faces are 64 to
+256 texels square, CMPR, with a one texel transparent border, rendered like Maya's
+envCube with Y up: `frt` looks along +Z, `bck` -Z, `rgt` +X, `lft` -X, image
+right = view direction x up; `top` (+Y) has +Z up in the image, `bot` (-Y) -Z.
+Only this layout makes the seams meet.
 
 ### Bump maps
 

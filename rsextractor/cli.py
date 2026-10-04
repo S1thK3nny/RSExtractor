@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import os
+import shutil
 import sys
 import time
 import traceback
@@ -19,6 +20,37 @@ def _filter(patterns):
         return None
     pats = [f"*{p.lower()}*" for p in patterns]
     return lambda label: any(fnmatch.fnmatch(label.lower(), p) for p in pats)
+
+
+class Progress:
+    """What is being extracted right now: one status line that rewrites itself on a
+    terminal, or one line per item when the output goes to a file."""
+
+    def __init__(self):
+        self.tty = sys.stdout.isatty()
+        self.t0 = time.time()
+        self.shown = False
+
+    def show(self, fraction: float, text: str) -> None:
+        elapsed = int(time.time() - self.t0)
+        line = f"  {fraction:4.0%} {elapsed // 60:3d}:{elapsed % 60:02d}  {text}"
+        if not self.tty:
+            print(line, flush=True)
+            return
+        width = shutil.get_terminal_size().columns - 1
+        sys.stdout.write("\r" + line[:width].ljust(width))
+        sys.stdout.flush()
+        self.shown = True
+
+    def clear(self) -> None:
+        if self.shown:
+            sys.stdout.write("\r" + " " * (shutil.get_terminal_size().columns - 1) + "\r")
+            sys.stdout.flush()
+            self.shown = False
+
+    def log(self, *args) -> None:
+        self.clear()
+        print(*args, flush=True)
 
 
 def cmd_info(args) -> int:
@@ -56,27 +88,33 @@ def cmd_extract(args) -> int:
             pool = make_pool(boot, game_dol, game.game, jobs)
             if pool is None:
                 runtime = Runtime(boot, game_dol, game.game)
+        progress = Progress()
         exporter = Exporter(game, out, embed_textures=args.embed, texture_format=args.texture_format,
                             skeletons=not args.no_skeletons, animations=not args.no_animations,
-                            runtime=runtime, pool=pool)
+                            runtime=runtime, pool=pool, log=progress.log)
         failures = 0
-        for m in game.iter_models(_filter(args.filter)):
+        print("Exporting models...")
+        for number, m in enumerate(game.iter_models(_filter(args.filter)), 1):
             label = f"{m.archive}/{m.entry}/{m.name}"
+            done, total = game.position
+            progress.show(done / max(total, 1), f"model {number}  {label}")
             try:
-                path = exporter.export_model(m)
-                if path and args.verbose:
-                    print(f"  {label}")
+                exporter.export_model(m)
             except Exception as exc:  # keep going; report at the end
                 failures += 1
-                print(f"  FAILED {label}: {exc}", file=sys.stderr)
+                progress.clear()
+                print(f"  FAILED {label}: {exc}", file=sys.stderr, flush=True)
                 if args.verbose:
                     traceback.print_exc()
+        progress.clear()
         if pool is not None:
             pool.shutdown()
         images = 0
         if not args.no_images:
             print("Exporting standalone images...")
-            images = export_images(game, out, _filter(args.filter), args.texture_format)
+            images = export_images(game, out, _filter(args.filter), args.texture_format,
+                                   lambda label, fraction: progress.show(fraction, f"image  {label}"))
+            progress.clear()
         s = exporter.stats
         if args.verbose and exporter.missing:
             print("Textures not found:")
@@ -84,6 +122,7 @@ def cmd_extract(args) -> int:
                 print(f"  {line}")
         print(f"Done in {time.time() - t0:.0f}s: {s['models']} models ({s['skeletons']} with skeletons, "
               f"{s['animations']} animations), {s['textures']} textures, {s['normal_maps']} normal maps, {s['emissive_maps']} emissive maps, "
+              f"{s['specular_maps']} specular maps, {s['environment_maps']} environment maps, "
               f"{images} images, {s['skipped']} empty models skipped, "
               f"{s['missing_textures']} textures not found, {failures} failures")
     return 1 if failures else 0

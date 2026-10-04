@@ -12,10 +12,11 @@ import numpy as np
 from PIL import Image
 
 from .archive import Archive, DataPool, Entry, decompress, parse_package, FOLDER
-from .bump import TILT, channel, emissive, gray, height_to_normal, opaque, tilt_to_normal
+from .bump import TILT, channel, emissive, gray, height_to_normal, opaque, specular, tilt_to_normal
 from .disc import Disc
+from .envmap import FACES, panorama
 from .fbx import write_fbx
-from .material import Material, parse_materials
+from .material import Material, parse_materials, specular_exponent
 from .anim import Runtime
 from .model import Mesh, parse_geometry
 from .rig import Rig, add_animations
@@ -81,6 +82,15 @@ class ModelParts:
     entry: str            # archive entry path, e.g. "plCraft/xwing_base"
     parts: Dict[str, bytes] = field(default_factory=dict)  # suffix -> bytes
     clips: List[Tuple[str, bytes]] = field(default_factory=list)  # animation clips next to the model
+    envmap: Dict[str, bytes] = field(default_factory=dict)  # face -> image: the package's environment cube
+
+
+def envmap_faces(files: Dict[str, bytes]) -> Dict[str, bytes]:
+    """The environment cube of a package (``extra/envMap/<face>``, RS2 front end and
+    briefing ``envMap/<face>``), or nothing when a face is missing."""
+    faces = {path.rsplit("/", 1)[1]: data for path, data in files.items()
+             if path.lower().rsplit("/", 2)[-2:-1] == ["envmap"] and path.rsplit("/", 1)[1] in FACES}
+    return faces if len(faces) == len(FACES) else {}
 
 
 class GameData:
@@ -97,6 +107,7 @@ class GameData:
         self._pool_refs: Optional[Dict[bytes, List[str]]] = None
         self._shared_clips: Optional[Dict[Tuple[str, int], List[Tuple[str, bytes]]]] = None
         self._cache: "OrderedDict[Tuple[str, str], bytes]" = OrderedDict()
+        self.position = (0, 0)  # (entries done, entries) while iter_models runs
 
     def archive_label(self, archive: Archive) -> str:
         return archive.base.rsplit("/", 1)[-1]
@@ -258,7 +269,11 @@ class GameData:
         """Every model on the disc. A ``bData.pool`` package is listed once, with the
         resource that references it first; a filter may match any of its references."""
         refs = self.pool_refs()
-        for archive, entry in self.iter_entries():
+        entries = list(self.iter_entries())
+        unreferenced = [key for key in self.data_pool or () if key not in refs]
+        total = len(entries) + len(unreferenced)
+        for done, (archive, entry) in enumerate(entries):
+            self.position = (done, total)
             label = f"{self.archive_label(archive)}/{entry.name}"
             data = self.read_entry(archive, entry)
             pkg = parse_package(data)
@@ -272,14 +287,18 @@ class GameData:
                 ref = f"{label}/{path[:-5]}"
                 if path.endswith("_dref") and refs.get(part, [None])[0] == ref:
                     groups.append((self._read_pool_package(part), refs[part], False))
-            yield from self._package_models(groups, archive, entry, filt)
-        for key in self.data_pool or ():
-            if key not in refs:
-                files = self._read_pool_package(key)
-                stems = sorted(path[:-3] for path in files if path.endswith("_ge"))
-                if stems:
-                    yield from self._package_models([(files, [f"bData/{stems[0]}"], False)], None,
-                                                    Entry(stems[0], 0, 0, 0, 0), filt, "bData")
+            envmap = envmap_faces(files)
+            for model in self._package_models(groups, archive, entry, filt):
+                model.envmap = envmap
+                yield model
+        for done, key in enumerate(unreferenced, len(entries)):
+            self.position = (done, total)
+            files = self._read_pool_package(key)
+            stems = sorted(path[:-3] for path in files if path.endswith("_ge"))
+            if stems:
+                yield from self._package_models([(files, [f"bData/{stems[0]}"], False)], None,
+                                                Entry(stems[0], 0, 0, 0, 0), filt, "bData")
+        self.position = (total, total)
 
     def _package_models(self, groups, archive: Optional[Archive], entry: Entry, filt,
                         archive_label: Optional[str] = None) -> Iterator[ModelParts]:
@@ -336,12 +355,32 @@ def decode_image_resource(data: bytes) -> Optional[np.ndarray]:
     return gx.decode(data[32:], fmt, w, h)
 
 
-def export_images(game: GameData, out_dir: str, filt=None, texture_format: str = "png") -> int:
-    """Write every standalone image resource under ``out_dir/<archive>/images``."""
+def write_envmap(faces: Dict[str, bytes], folder: str, texture_format: str) -> int:
+    """Write an environment cube as ``folder/<face>`` images (opaque) and an
+    equirectangular ``folder/panorama``; returns 1 when written."""
+    images = {face: decode_image_resource(data) for face, data in faces.items()}
+    if any(img is None for img in images.values()):
+        return 0
+    os.makedirs(folder, exist_ok=True)
+    for face, img in images.items():
+        save_image(opaque(img), os.path.join(folder, f"{face}.{texture_format}"), texture_format)
+    save_image(panorama(images), os.path.join(folder, f"panorama.{texture_format}"), texture_format)
+    return 1
+
+
+def export_images(game: GameData, out_dir: str, filt=None, texture_format: str = "png",
+                  progress: Optional[Callable[[str, float], None]] = None) -> int:
+    """Write every standalone image resource under ``out_dir/<archive>/images``.
+    ``progress(label, fraction done)`` is called for every entry looked at. Six
+    ``envmap/<name>/<face>`` images (RS2) also give an ``envmap/<name>/panorama``."""
     count = 0
-    for archive, entry in game.iter_entries(filt):
+    cubes: Dict[str, Dict[str, bytes]] = {}
+    entries = list(game.iter_entries(filt))
+    for done, (archive, entry) in enumerate(entries):
         if entry.name.endswith(("_tpi", "_tpd")):
             continue
+        if progress is not None:
+            progress(f"{game.archive_label(archive)}/{entry.name}", done / len(entries))
         data = game.read_entry(archive, entry)
         if parse_package(data):
             continue
@@ -351,8 +390,17 @@ def export_images(game: GameData, out_dir: str, filt=None, texture_format: str =
         parts = [safe_name(p) for p in entry.name.split("/")]
         target = os.path.join(out_dir, safe_name(game.archive_label(archive)), "images", *parts) + "." + texture_format
         os.makedirs(os.path.dirname(target), exist_ok=True)
+        folder, _, face = entry.name.rpartition("/")
+        if face in FACES and folder.lower().startswith("envmap/"):
+            img = opaque(img)  # the transparent border only matters to the game's sphere map render
+            cubes.setdefault(os.path.dirname(target), {})[face] = data
         save_image(img, target, texture_format)
         count += 1
+    for folder, faces in cubes.items():
+        if len(faces) == len(FACES):
+            images = {face: decode_image_resource(data) for face, data in faces.items()}
+            save_image(panorama(images), os.path.join(folder, f"panorama.{texture_format}"), texture_format)
+            count += 1
     return count
 
 
@@ -411,10 +459,11 @@ class Exporter:
         self.log = log
         self.written_textures: Dict[str, str] = {}
         self.stats = {"models": 0, "skipped": 0, "textures": 0, "normal_maps": 0, "emissive_maps": 0,
-                      "missing_textures": 0,
+                      "specular_maps": 0, "environment_maps": 0, "missing_textures": 0,
                       "skeletons": 0, "animations": 0}
         self.missing: List[str] = []
         self.missing_hashes: set = set()
+        self.envmap_folders: set = set()
 
     def model_dir(self, m: ModelParts) -> str:
         parts = [safe_name(p) for p in m.entry.split("/")]
@@ -428,6 +477,10 @@ class Exporter:
         materials = parse_materials(m.parts.get("si", b""), self.g.game)
         folder = self.model_dir(m)
         os.makedirs(folder, exist_ok=True)
+        if m.envmap and folder not in self.envmap_folders:
+            self.envmap_folders.add(folder)
+            self.stats["environment_maps"] += write_envmap(m.envmap, os.path.join(folder, "envmap"),
+                                                           self.texture_format)
         scene = Scene(m.name)
         base = safe_name(m.name)
 
@@ -529,7 +582,15 @@ class Exporter:
             return SceneMaterial(f"material{index}")
         name = f"{model}_{mat.name}"
         sm = SceneMaterial(safe_name(mat.name), diffuse=tuple(mat.color0), wrap_u=not mat.clamp_s,
-                           wrap_v=not mat.clamp_t)
+                           wrap_v=not mat.clamp_t, reflection=mat.reflection)
+        if mat.specular:
+            sm.specular, sm.specular_factor = tuple(mat.color1[:3]), 1.0
+            sm.shininess = specular_exponent(mat.shininess)
+            if mat.specular_masked and mat.textures:
+                tint = mat.color1
+                variant = bytes(round(c * 255) for c in tint[:3]).hex()
+                sm.specular_map = self._texture_file(mat.textures[0], folder, name, "specular",
+                                                     lambda img: specular(img, tint), variant)
         if mat.textures:
             # Keep alpha only where it is transparency; a CMPR color map's 1 bit alpha is
             # otherwise a mask for another slot (written as its own map below) or unused.
@@ -626,7 +687,8 @@ class Exporter:
             os.makedirs(os.path.dirname(target), exist_ok=True)
             save_image(img, target, self.texture_format)
             self.written_textures[key] = target
-            self.stats[{"normal": "normal_maps", "emissive": "emissive_maps"}.get(kind, "textures")] += 1
+            self.stats[{"normal": "normal_maps", "emissive": "emissive_maps",
+                        "specular": "specular_maps"}.get(kind, "textures")] += 1
             return rel
         source = self.written_textures[key]
         if not source:

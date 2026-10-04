@@ -4,8 +4,10 @@ Layout (RS2 FUN_7fd2c3c8)::
 
     "ABME", u32 count, then ``count`` materials of 0x110 (RS2) / 0x120 (RS3) bytes
     material +0x00 name[16]
-    RS2: +0x10 u32 type, +0x14 u32 flags, +0x18 RGBA color, +0x1C RGBA color
-    RS3: +0x10 u32 type, +0x14 u32 flags, +0x1C RGBA color, +0x20 RGBA color
+    RS2: +0x10 u32 type, +0x14 u32 flags, +0x18 RGBA diffuse, +0x1C RGBA specular,
+         +0x20 f32 shininess, +0x24 f32 reflectivity
+    RS3: +0x10 u32 type, +0x14 u32 flags, +0x1C RGBA diffuse, +0x20 RGBA specular,
+         +0x24 f32 shininess, +0x2D u8 reflectivity (/ 255)
     +0x30 texture count (u32 in RS2, u8 in RS3)
     +0x34 texture records, 0x34 (RS2) / 0x48 (RS3) bytes each:
         +0x00 u16 width, +0x02 u16 height, +0x04 u8 mip count, +0x05 u8 GX format
@@ -28,9 +30,23 @@ Layout (RS2 FUN_7fd2c3c8)::
     (alpha 0) or emboss grooves (alpha 0, craft hulls). Without such a slot it is unused.
 
 Flags 0x400 / 0x800 select clamped addressing in S / T (wrap otherwise).
+
+The shader is picked by the type (RS2) or by type bits (RS3, FUN_7f3d6430, mapped
+to the same numbering), see :func:`shader_index`. Lit shaders 4-8 and 16-19 have a
+reflective variant (+5 and +4, RS3 also 30-33 -> 34-37, tables 0x7fdd89d8 /
+0x7f67259c) used when the reflectivity exceeds 0.05 (RS2) or 20/255 (RS3). It
+lights the color map with ``lerp(lighting, environment, reflectivity)``; the
+environment is the level's ``envMap`` cube rendered into a sphere map. Shaders with
+a shininess add a highlight from a texture looked up by the view space normal
+(RS2 ``envmap/hilite``), scaled by ``0.2 + 3.8 * shininess`` around the half
+vector (FUN_7fd2f7f0, RS3 FUN_7f3c2b74) and tinted by the specular color. Odd
+variants (6, 8, 17, 19, 31, 33 and their reflective forms) and the craft hull
+(27) mask it with ``4 * (green - 0.25)`` of the color map (TEV swap table 1 puts
+green into alpha, FUN_7fd34898).
 """
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
@@ -43,6 +59,46 @@ SELF_LIT = {2: 2, 3: 3}
 
 CMPR = 14
 FORMAT_ALIASES = {15: CMPR}  # data laid out exactly as GX CMPR
+
+# Shaders with a reflective variant, and the threshold above which it is used.
+REFLECTIVE_SHADERS = set(range(4, 9)) | set(range(16, 20)) | set(range(30, 34))
+MIN_REFLECTIVITY = {2: 0.05, 3: 19.5 / 255}  # RS2 f32 > 0.05, RS3 byte >= 20
+# Shaders that mask the highlight with the color map's green channel.
+MASKED_SPECULAR = {6, 8, 17, 19, 27, 31, 33}
+
+
+def shader_index(mtype: int, flags: int) -> int:
+    """Index into the shader table (RS2 the type itself; RS3 FUN_7f3d6430 maps type bits)."""
+    if mtype < 0x80000000:
+        return mtype
+    if not mtype & 1:
+        return 4 if mtype & 4 else 1
+    if mtype & 0x40:
+        if not flags & 0x4000:
+            return 0x19 if mtype & 2 else 0x18
+        return 0x1B if mtype & 4 else 0x1A
+    if mtype & 4:
+        base = 0x1E if flags & 0x100 else 0x10 if mtype & 0x20 else 5
+        return base + (1 if mtype & 8 else 0) + (2 if mtype & 2 else 0)
+    if not mtype & 0x20:
+        return 3 if mtype & 2 else 2
+    if not flags & 0x100:
+        return 0xF if mtype & 2 else 0xE
+    return 0x1D if mtype & 2 else 0x1C
+
+
+def specular_exponent(shininess: float) -> float:
+    """Blinn-Phong exponent with the same half width as the game's highlight.
+
+    The highlight texture falls off linearly to the edge, ``1 - k * sin(angle to the
+    half vector)`` with ``k = 0.2 + 3.8 * shininess``, so it is half bright at
+    ``sin = 0.5 / k``; ``cos^n`` is half there for the returned ``n``."""
+    k = 0.2 + 3.8 * min(max(shininess, 0.0), 1.0)
+    sin_half = min(0.5 / k, 1.0)
+    cos_half = math.sqrt(1.0 - sin_half * sin_half)
+    if cos_half <= 0.0:
+        return 1.0
+    return max(1.0, math.log(0.5) / math.log(cos_half))
 
 @dataclass
 class TextureRef:
@@ -64,6 +120,27 @@ class Material:
     slots: List[int] = field(default_factory=list)  # texture index per map type, -1 = unused
     slot_modes: List[int] = field(default_factory=list)  # RS2 mode / RS3 swap byte per slot
     game: int = 2
+    shininess: float = 0.0       # 0 = no highlight
+    reflectivity: float = 0.0    # as stored; see ``reflection``
+
+    @property
+    def shader(self) -> int:
+        return shader_index(self.type, self.flags)
+
+    @property
+    def specular(self) -> bool:
+        return self.shininess > 0.0
+
+    @property
+    def specular_masked(self) -> bool:
+        return self.specular and self.shader in MASKED_SPECULAR
+
+    @property
+    def reflection(self) -> float:
+        """Share of the environment in the lighting (0 when the shader has no reflection)."""
+        if self.shader in REFLECTIVE_SHADERS and self.reflectivity > MIN_REFLECTIVITY[self.game]:
+            return min(self.reflectivity, 1.0)
+        return 0.0
 
     def slot(self, n: int) -> int:
         i = self.slots[n] if n < len(self.slots) else -1
@@ -140,6 +217,13 @@ def parse_materials(si: bytes, game: int = 2) -> List[Material]:
                                        si[r + hash_off:r + hash_off + 20]))
         slots = [si[base + slot_off + k * slot_size] for k in range(nslots)]
         modes = [si[base + slot_off + k * slot_size + 1] for k in range(nslots)]
+        if game == 2:
+            shininess, reflectivity = struct.unpack_from(">ff", si, base + 0x20)
+        else:
+            shininess, reflectivity = struct.unpack_from(">f", si, base + 0x24)[0], si[base + 0x2D] / 255.0
+        if not math.isfinite(shininess):
+            shininess = 0.0
         out.append(Material(name, mtype, flags, _rgba(si, base + color_off), _rgba(si, base + color_off + 4),
-                            textures, [-1 if t == 0xFF else t for t in slots], modes, game))
+                            textures, [-1 if t == 0xFF else t for t in slots], modes, game,
+                            shininess, reflectivity))
     return out

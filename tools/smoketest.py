@@ -1,0 +1,91 @@
+"""Quick regression run: extract a few models per game that together cover every
+feature, instead of the whole disc (a full Rebel Strike run writes ~10 GB in ~30 min).
+
+    python tools/smoketest.py <rs2.iso> [<rs3.iso>] [-o output/_test] [-- extra extract args]
+
+Each disc goes to ``<out>/RS<n>`` (replaced on every run). Fails when a model fails
+or a texture is missing.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+# filter -> what it covers
+SAMPLES = {
+    2: {
+        "plCraft/awing_base": "craft: emboss from color alpha (type 27), self lit cockpit, animation",
+        "plCraft/tie_base": "opacity map (engine glow sprite)",
+        "gfxYavinTreeTop1_1": "opacity map (cut out leaves)",
+        "dsTurDest": "IA4 tilt bump map",
+        "pilots/pilLuke": "skinned skeleton bound at scale, animation",
+        "l03/00/atatAI": "walker animation",
+        "lvlPack01/l05/00/stardest": "417 meshes, textures stored as lower mips",
+        "l00/01/sky00": "RGBA8 sky",
+        "l02/00/XWing_wm": "reflective canopy, level environment cube",
+        "frontend/goldMedal": "reflective, front end environment cube",
+    },
+    3: {
+        "plCraft/xwing_base": "craft + cockpit: emboss from color alpha, self lit, animation",
+        "plCraft/hanEmpire_base": "CMPR tilt bump, character skeleton and clips",
+        "plCraft/tie_base": "opacity map",
+        "plCraft/atst_base": "walker IK solver",
+        "L_03_Ralltiir_lvl/01c00/StarDestroyerBigBall": "I4 height bump",
+        "L_03_Ralltiir_lvl/01c01/fltATAT_ai": "bData.pool model, shared clips",
+        "coop_08_Bespin_lvl/01/BespinCityVista": "opacity, streamed gTexPool mips",
+        "coop_08_Bespin_lvl/01/BespinSkyClouds": "material format 15 (CMPR)",
+        "E_01_Luke_lvl/00/EndorSky": "RGBA8 sky",
+        "B_02_Hoth_lvl/01/grndHothMedicalCenter": "I4 opacity and bump textures",
+        "hangarCalamari_lvl/00/Awing_hangar": "reflective, masked highlight, level environment cube",
+    },
+}
+
+GAME_IDS = {"GSW": 2, "GLR": 3}
+
+
+def game_of(iso: str) -> int:
+    with open(iso, "rb") as f:
+        head = f.read(6).decode("ascii", "replace")
+    if head[:3] not in GAME_IDS:
+        sys.exit(f"{iso}: not Rogue Squadron II or III ({head})")
+    return GAME_IDS[head[:3]]
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("isos", nargs="+")
+    p.add_argument("-o", "--out", default=os.path.join("output", "_test"))
+    p.add_argument("extra", nargs=argparse.REMAINDER, help="after --: more arguments for extract")
+    args = p.parse_args()
+    extra = [a for a in args.extra if a != "--"]
+    ok = True
+    for iso in args.isos:
+        game = game_of(iso)
+        target = os.path.join(args.out, f"RS{game}")
+        shutil.rmtree(target, ignore_errors=True)
+        print(f"== RS{game}: {len(SAMPLES[game])} samples -> {target}")
+        cmd = [sys.executable, "-m", "rsextractor", "extract", iso, "-o", args.out, "-t", "tga", "--no-images"]
+        for f in SAMPLES[game]:
+            cmd += ["-f", f]
+        t0 = time.time()
+        lines = []
+        with subprocess.Popen(cmd + extra, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                              bufsize=1, env={**os.environ, "PYTHONUNBUFFERED": "1"}) as proc:
+            for line in proc.stdout:
+                print(line, end="", flush=True)
+                lines.append(line)
+        done = re.search(r"Done in .*", "".join(lines))
+        fine = (proc.returncode == 0 and done is not None
+                and " 0 textures not found, 0 failures" in done.group())
+        print(f"   {'OK' if fine else 'FAILED'} in {time.time() - t0:.0f}s")
+        ok &= fine
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

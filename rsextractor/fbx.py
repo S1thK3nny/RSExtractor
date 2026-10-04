@@ -306,8 +306,11 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
         _p70(mp, "DiffuseFactor", "Number", "", "A", 1.0)
         _p70(mp, "AmbientColor", "Color", "", "A", *map(float, mat.ambient))
         _p70(mp, "SpecularColor", "Color", "", "A", *map(float, mat.specular))
+        _p70(mp, "SpecularFactor", "Number", "", "A", float(mat.specular_factor))
         _p70(mp, "Shininess", "double", "Number", "", float(mat.shininess))
         _p70(mp, "ShininessExponent", "double", "Number", "", float(mat.shininess))
+        _p70(mp, "ReflectionColor", "Color", "", "A", 1.0, 1.0, 1.0)
+        _p70(mp, "ReflectionFactor", "Number", "", "A", float(mat.reflection))
         opacity = float(mat.diffuse[3]) if len(mat.diffuse) > 3 else 1.0
         _p70(mp, "Opacity", "double", "Number", "", opacity)
         _p70(mp, "TransparencyFactor", "Number", "", "A", 1.0 - opacity)
@@ -325,6 +328,8 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
             connect("OP", add_texture(mat, mat.normal_map, "_normal", False), mid, "NormalMap")
         if mat.emissive_map:
             connect("OP", add_texture(mat, mat.emissive_map, "_emissive", False), mid, "EmissiveColor")
+        if mat.specular_map:
+            connect("OP", add_texture(mat, mat.specular_map, "_specular", False), mid, "SpecularColor")
 
     # --- meshes
     pose_entries: List[Tuple[int, np.ndarray]] = []

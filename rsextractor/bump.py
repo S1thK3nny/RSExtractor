@@ -1,4 +1,5 @@
-"""Bump maps -> tangent space normal maps, self lit masks -> emissive maps.
+"""Bump maps -> tangent space normal maps, self lit masks -> emissive maps,
+highlight masks -> specular maps.
 
 Both games bump map in two ways (see docs/FORMATS.md, "Bump maps"):
 
@@ -77,4 +78,12 @@ def emissive(color: Optional[np.ndarray], mask: np.ndarray) -> np.ndarray:
     if color.shape[:2] != mask.shape:
         mask = np.asarray(Image.fromarray(mask, "F").resize((color.shape[1], color.shape[0]), Image.BILINEAR))
     rgb = np.rint(color[..., :3].astype(np.float32) * mask[..., None]).astype(np.uint8)
+    return np.concatenate([rgb, np.full(mask.shape + (1,), 255, np.uint8)], -1)
+
+
+def specular(color: np.ndarray, tint: tuple) -> np.ndarray:
+    """Specular color map: ``tint`` where the color map's green channel lets the
+    highlight through, ``clamp(4 * (green - 0.25))`` as the game masks it."""
+    mask = np.clip(4.0 * (color[..., 1].astype(np.float32) / 255.0 - 0.25), 0.0, 1.0)
+    rgb = np.rint(mask[..., None] * np.asarray(tint[:3], np.float32) * 255.0).astype(np.uint8)
     return np.concatenate([rgb, np.full(mask.shape + (1,), 255, np.uint8)], -1)

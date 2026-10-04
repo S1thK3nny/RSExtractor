@@ -14,6 +14,11 @@ III: Rebel Strike**, straight from your own disc images.
 * Self lit masks (cockpit lights, windows) → **emissive maps** (`*_emissive`) linked
   to the FBX materials. Color textures keep alpha only where the game uses it as
   transparency (opacity maps are baked into it); otherwise they are opaque.
+* Highlights → specular color, shininess (as a Blinn-Phong exponent) and, where
+  the game masks them with the color map, **specular maps** (`*_specular`).
+* Reflections → the material's reflectivity as the FBX reflection factor
+  (Blender: metallic), and every level's environment cube as six faces plus an
+  equirectangular **panorama** (`envmap/panorama`) to use as the world.
 * Standalone images (menus, backdrops, gallery art, HUD, fonts) → PNG or TGA.
 
 ## Requirements
@@ -48,7 +53,7 @@ python -m rsextractor extract rs3.iso --no-skeletons
 
 Output layout: `output/RS<n>/<archive>/<resource>/<model>.fbx` with the
 model's textures in `.../<resource>/textures/`, named
-`<model>_<material>_<sha1 prefix>[_normal|_height|_emissive]`. The discs keep no
+`<model>_<material>_<sha1 prefix>[_normal|_height|_emissive|_specular]`. The discs keep no
 texture names, so the material name (often a Maya default like `phong31`) is the
 best label there is. Player craft live under
 `data/plCraft/...`, level content under `lvlPackNN/...`.
@@ -84,6 +89,14 @@ planted exactly as in the game. This is CPU heavy: animation evaluation runs in
 parallel on all cores (`-j` to change), a full Rebel Strike extraction with its
 ~1100 clips takes a while; `--no-animations` skips it.
 
+Reflective materials (canopies, chrome, medals, the Death Star core) mirror the
+environment cube of the level they are drawn in. Each level resource writes its
+cube to `.../<resource>/envmap/` (`rgt`, `lft`, `top`, `bot`, `frt`, `bck` and
+`panorama`); Rogue Leader's loose cubes land in `data/images/envmap/<name>/`.
+The panorama is laid out for Blender: use it in an Environment Texture node of
+the world and the imported models reflect it the way they do in the game. Models
+outside levels (`data/plCraft`) have no cube of their own; any level's will do.
+
 Units are metres (1 game unit = 1 m), Y up.
 
 ## Status
@@ -94,6 +107,7 @@ Units are metres (1 game unit = 1 m), Y up.
 | Materials + textures | yes | yes |
 | Bump maps (as normal maps) | yes | yes |
 | Self lit masks (as emissive maps), opacity maps (as alpha) | yes | yes |
+| Specular highlights, reflectivity, environment cubes (as panoramas) | yes | yes |
 | Standalone images | yes | yes |
 | Articulated models (walkers, troopers, turrets) assembled from their node hierarchy | yes | yes |
 | Skeletons / skin weights in the FBX | yes | yes (capes lie flat as stored; the game simulates cloth) |
@@ -112,6 +126,16 @@ added without touching the game parsers. glTF would be the better choice for
 web or engine pipelines.
 
 ## Development
+
+`tools/smoketest.py` extracts a handful of models per game that together cover
+every feature (skeletons, IK, pool models, streamed textures, every bump, opacity
+and self lit case) into `output/_test` in about a minute, instead of a full run
+(Rebel Strike alone writes ~10 GB in ~30 min). It fails on any failed model or
+missing texture:
+
+```
+python tools/smoketest.py rs2.iso rs3.iso
+```
 
 `tools/fbxdump.py` is an independent FBX reader that validates the binary
 structure of exported files (`python tools/fbxdump.py model.fbx --tree`).

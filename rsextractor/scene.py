@@ -22,11 +22,14 @@ class SceneMaterial:
     diffuse: tuple = (1.0, 1.0, 1.0, 1.0)
     ambient: tuple = (0.0, 0.0, 0.0)
     specular: tuple = (0.0, 0.0, 0.0)
-    shininess: float = 0.0
+    specular_factor: float = 0.0        # 0 = no highlight
+    shininess: float = 0.0              # Blinn-Phong exponent
+    reflection: float = 0.0             # share of the environment reflection (metallic)
     texture: Optional[str] = None       # path relative to the exported file
     alpha_texture: bool = False         # texture carries meaningful alpha
     normal_map: Optional[str] = None    # tangent space (OpenGL) normal map, relative path
     emissive_map: Optional[str] = None  # emitted color, relative path
+    specular_map: Optional[str] = None  # specular color x highlight mask, relative path
     double_sided: bool = False
     wrap_u: bool = True
     wrap_v: bool = True
