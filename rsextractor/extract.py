@@ -495,6 +495,11 @@ def _transform(positions: np.ndarray, normals: Optional[np.ndarray], m: np.ndarr
     return positions, normals
 
 
+def _wind(triangles: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """Triangles kept front facing under ``m``: a mirroring matrix reverses their winding."""
+    return triangles[:, [0, 2, 1]] if np.linalg.det(m[:3, :3]) < 0 else triangles
+
+
 def _merge_copies(mesh: Mesh, matrices: List[np.ndarray], name: str, material: int, node: int) -> SceneMesh:
     """One scene mesh holding a copy of ``mesh`` transformed by each matrix."""
     positions = np.asarray(mesh.positions, np.float64)
@@ -509,7 +514,7 @@ def _merge_copies(mesh: Mesh, matrices: List[np.ndarray], name: str, material: i
     return SceneMesh(
         name=name,
         positions=np.concatenate(pos),
-        triangles=np.concatenate([mesh.triangles + k * n for k in range(copies)]),
+        triangles=np.concatenate([_wind(mesh.triangles, m) + k * n for k, m in enumerate(matrices)]),
         normals=np.concatenate(nrm) if nrm else None,
         uvs=[np.tile(uv, (copies, 1)) for uv in uvs],
         colors=np.tile(mesh.colors, (copies, 1)) if mesh.colors is not None else None,
@@ -598,6 +603,7 @@ class Exporter:
                 scene.materials.append(self._material(mat, mesh.material_index, folder, base))
             uvs = [mesh.uvs] + list(mesh.extra_uvs) if mesh.uvs is not None else []
             positions, normals = mesh.positions.astype(np.float64), mesh.normals
+            triangles = mesh.triangles
             bones = weights = None
             parent = lod_nodes[label] if label else (-1 if rig is not None else 0)
             if rig is not None:
@@ -605,12 +611,13 @@ class Exporter:
             elif layout is not None:
                 node, matrix = layout[0][mesh_no], layout[1][mesh_no]
                 positions, normals = _transform(positions, normals, matrix)
+                triangles = _wind(triangles, matrix)
                 if node >= 0:
                     parent = part_nodes[node]
             scene.meshes.append(SceneMesh(
                 name=f"{base}_{mesh_no:02d}" + (f"_{label}" if label else ""),
                 positions=positions,
-                triangles=mesh.triangles,
+                triangles=triangles,
                 normals=normals,
                 uvs=uvs,
                 colors=mesh.colors,
@@ -681,6 +688,7 @@ class Exporter:
             for mesh, node, matrix in zip(geo.meshes, mesh_nodes, matrices):
                 world = frames[node] @ matrix if node >= 0 else matrix
                 mesh.positions, mesh.normals = _transform(mesh.positions.astype(np.float64), mesh.normals, world)
+                mesh.triangles = _wind(mesh.triangles, world)
         else:
             place_static_meshes(geo.meshes, parts.get("su"), parts["ge"], self.g.game)
         out: List[Tuple[Mesh, int]] = []

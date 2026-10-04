@@ -284,20 +284,21 @@ def _parse_mesh(ge: bytes, off: int, vats: List[VertexFormat], node_index: int,
 
 
 def _triangulate(prim: int, first: int, count: int) -> List[Tuple[int, int, int]]:
+    """Triangles wound counter clockwise (FBX front faces); GX front faces are clockwise."""
     out = []
     if prim == GX_TRIANGLES:
         for i in range(0, count - 2, 3):
-            out.append((first + i, first + i + 1, first + i + 2))
+            out.append((first + i, first + i + 2, first + i + 1))
     elif prim == GX_TRIANGLESTRIP:
         for i in range(count - 2):
             a, b, c = first + i, first + i + 1, first + i + 2
-            out.append((a, b, c) if i % 2 == 0 else (b, a, c))
+            out.append((a, c, b) if i % 2 == 0 else (a, b, c))
     elif prim == GX_TRIANGLEFAN:
         for i in range(1, count - 1):
-            out.append((first, first + i, first + i + 1))
+            out.append((first, first + i + 1, first + i))
     elif prim == GX_QUADS:
         for i in range(0, count - 3, 4):
             q = first + i
-            out.append((q, q + 1, q + 2))
-            out.append((q, q + 2, q + 3))
+            out.append((q, q + 2, q + 1))
+            out.append((q, q + 3, q + 2))
     return out

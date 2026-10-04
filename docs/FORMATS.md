@@ -158,6 +158,8 @@ VAT word (RS2 `FUN_7fd28640`, RS3 `FUN_7f398ef0`), one per vertex format index
 | 23   | RS3: positions dequantized on the CPU |
 
 Display lists are standard GX (`0x98` strips, `0x90` triangles, `0xA0` fans, `0x80` quads).
+GX front faces are wound clockwise, so the exporter reverses every triangle for FBX
+(counter clockwise); the stored normals already point out of the front faces.
 
 ## Materials `_si` ("ABME")
 
