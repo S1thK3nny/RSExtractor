@@ -37,6 +37,22 @@ Most decompressed resources are packages: a blob of parts plus a directory.
   (relative to data_start), length, attrib, end}`, a terminator whose last word
   is the string table offset, the string table, then the data.
 
+RS3 levels reference most of their models instead of holding them: a 20-byte
+`X_dref` part is the key of a package in `Rogue3/bData.pool`:
+
+```
+u32 count, u32, u32
+count x {sha1[20], u32 offset, u32 size, u32 size}   offset/size into the file
+```
+
+Each entry is a zlib packed package (RS3 layout) holding one or more models
+(`grndATAT_ai` with its clips, destroyed variants, tiles) or, without any
+geometry, a clip set shared by a level's characters (`ss2HgunAnims`,
+`ssSharedAnims`, `ewokAnimation`, `AImainAnimation` ...). A level uses such a
+set for every character whose `_su` channel count matches the clips' curve count
+(69 for troopers and officers, 57 for Ewoks, Jawas and Ugnaughts, 171 for Han).
+The same name can stand for different packages in different levels (`tile05`).
+
 A model named `X` consists of `X_su` (setup), `X_ge` (geometry), `X_si`
 (materials), optional `X_an` (animation), `X_cl` (collision) and, in RS3, `X_nm`
 (names). Texture pools are `*_tpi` + `*_tpd`.
@@ -100,7 +116,8 @@ Display lists are standard GX (`0x98` strips, `0x90` triangles, `0xA0` fans, `0x
 type, flags (`0x400`/`0x800` = clamp S/T), two RGBA colors, texture count at
 +0x30 (u32 RS2, u8 RS3), texture records at +0x34 of 0x34 (RS2) / 0x48 (RS3)
 bytes: `u16 width, u16 height, u8 mips, u8 GX format`, SHA-1 at +0x14 (RS2) /
-+0x34 (RS3).
++0x34 (RS3). RS3 tags one CMPR texture (the Bespin sky) as format 15; its data is
+plain CMPR. A second texture record is usually a bump map.
 
 ## Textures
 
@@ -108,11 +125,27 @@ bytes: `u16 width, u16 height, u8 mips, u8 GX format`, SHA-1 at +0x14 (RS2) /
 or `{sha1[20], u32 offset/32, u8 missing_top_mips, u8, u16}` (RS3). Data is the
 GX mip chain in the matching `_tpd`.
 
+RS2 offsets carry a level count in their top bits: with `n = offset >> 25` the
+texture is a lower mip of a larger texture in the same pool, so its data starts
+after the first `n` levels of a `(width << n, height << n)` chain at `offset &
+0x1FFFFFF`. A 256x256 texture with `n = 1` is the second level of the 512x512
+texture stored there (Tatooine buildings, the Star Destroyer hull, the briefing
+room).
+
+RS3 offsets use the top byte the same way, one nibble per axis (`8 | shift`):
+`0x99` is one level below the texture at the same offset. Its levels come from
+that texture, including the top ones it streams from `gTexPool.cData`. Entries
+with unequal shifts (`0x90`) also have their own copy in the global pool.
+
 RS3 streams full-resolution top mips from `gTexPool.cData`: `"ctp0", u32 count`,
 entries `{pool_offset, file_offset, packed_a, packed_b}`; `pool/global_tpool` is
 its SMMJ index (offsets/32 = `pool_offset`). Part A (top mips, may be empty) is at
-`file_offset`, part B at the next 32-byte boundary. Both use Factor 5 LZ
-(`FUN_7f3e9ffc`): 4-byte header, byte 3 selects the variant.
+`file_offset`, part B at the next 32-byte boundary. They hold the levels the
+local pools lack (the SMMJ `missing_top_mips`): B the lowest of them, A the one
+above. Both use Factor 5 LZ (`FUN_7f3e9ffc`): 4-byte header, byte 3 selects the
+variant. A part whose packed size equals its level's size is stored raw and read
+straight into place (`FUN_7f3e9604`), as for a few Endor and Dantooine rocks and
+trees.
 
 * literal: `0nnnnnnn` → copy n+1 bytes
 * variant 0 match: `1lllldd dddddddd` → length l+3, distance d+1 (11 bits)

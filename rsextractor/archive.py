@@ -12,6 +12,9 @@ A decompressed resource can itself be a *package*: a data blob followed by
 a binary directory of 0x30-byte entries (name[0x20], offset, length,
 attrib, end).  Packages hold the model parts (``name_su``, ``name_ge``,
 ``name_si``, ``name_an``, ``name_cl``).
+
+Rebel Strike levels hold most of their models as ``name_dref`` parts instead: the
+SHA-1 of a package in ``bData.pool`` (:class:`DataPool`).
 """
 from __future__ import annotations
 
@@ -96,6 +99,34 @@ class Archive:
                 raise KeyError(f"{entry} not in {self.base}")
             entry = found
         return decompress(self.read_raw(entry))
+
+
+class DataPool:
+    """RS3 ``bData.pool``: shared level packages, referenced by SHA-1 from ``*_dref`` parts.
+
+    Header ``u32 count, u32, u32``, then count x ``{sha1[20], u32 offset, u32 size,
+    u32 size}``; every entry is a zlib packed package.
+    """
+
+    def __init__(self, disc: Disc, name: str = "bData.pool"):
+        self.disc = disc
+        self.name = name
+        count = struct.unpack(">I", disc.read_range(name, 0, 4))[0]
+        index = disc.read_range(name, 0, 12 + 32 * count)
+        self.entries: Dict[bytes, tuple] = {}
+        for i in range(count):
+            e = 12 + 32 * i
+            self.entries[index[e:e + 20]] = struct.unpack_from(">II", index, e + 20)
+
+    def __contains__(self, key: bytes) -> bool:
+        return key in self.entries
+
+    def __iter__(self) -> Iterator[bytes]:
+        return iter(self.entries)
+
+    def read(self, key: bytes) -> bytes:
+        offset, size = self.entries[key]
+        return decompress(self.disc.read_range(self.name, offset, size))
 
 
 @dataclass

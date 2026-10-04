@@ -11,7 +11,7 @@ from typing import Callable, Dict, Iterator, List, Optional, Tuple
 import numpy as np
 from PIL import Image
 
-from .archive import Archive, Entry, decompress, parse_package, FOLDER
+from .archive import Archive, DataPool, Entry, decompress, parse_package, FOLDER
 from .disc import Disc
 from .fbx import write_fbx
 from .material import Material, parse_materials
@@ -65,6 +65,11 @@ def safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", name) or "unnamed"
 
 
+def level_of(label: str) -> str:
+    """``lvlPack02/L_06_Hoth_lvl/01/x`` -> ``lvlPack02/L_06_Hoth_lvl``."""
+    return "/".join(label.split("/")[:2])
+
+
 @dataclass
 class ModelParts:
     name: str
@@ -84,6 +89,9 @@ class GameData:
         self.archives: List[Archive] = [Archive(disc, f.path[:-4]) for f in disc if f.path.lower().endswith(".dir")]
         self.textures = TextureLibrary()
         self.normal_table = rs3_normal_table(disc) if self.game == 3 else None
+        self.data_pool = DataPool(disc) if disc.exists("bData.pool") else None
+        self._pool_refs: Optional[Dict[bytes, List[str]]] = None
+        self._shared_clips: Optional[Dict[Tuple[str, int], List[Tuple[str, bytes]]]] = None
         self._cache: "OrderedDict[Tuple[str, str], bytes]" = OrderedDict()
 
     def archive_label(self, archive: Archive) -> str:
@@ -110,6 +118,7 @@ class GameData:
     def index_textures(self) -> None:
         """Register every texture pool on the disc (lazy loaders, data read on demand)."""
         standalone: Dict[str, Dict[str, Tuple[Archive, Entry]]] = {}
+        refs: Dict[bytes, List[str]] = {}
         for archive, entry in self.iter_entries():
             name = entry.name
             if name.endswith(("_tpi", "_tpd")) and entry.length:
@@ -119,6 +128,7 @@ class GameData:
             pkg = parse_package(data)
             if not pkg:
                 continue
+            self._add_pool_refs(refs, f"{self.archive_label(archive)}/{name}", data, pkg)
             files = {p.path: p for p in pkg if not p.attrib & FOLDER}
             for path, p in files.items():
                 if not path.endswith("_tpi"):
@@ -142,7 +152,31 @@ class GameData:
                 header = self.disc.read_range("gTexPool.cData", 0, 8 + 16 * count)
                 self.textures.add_global_pool(index, header,
                                               lambda o, n: self.disc.read_range("gTexPool.cData", o, n))
+        if self._pool_refs is None:
+            self._pool_refs = refs
         self.log(f"  indexed {len(self.textures)} textures")
+
+    def _add_pool_refs(self, refs: Dict[bytes, List[str]], label: str, data: bytes, pkg) -> None:
+        if self.data_pool is None:
+            return
+        for p in pkg:
+            if p.path.endswith("_dref") and p.length == 20:
+                key = data[p.offset:p.offset + 20]
+                if key in self.data_pool:
+                    refs.setdefault(key, []).append(f"{label}/{p.path[:-5]}")
+
+    def pool_refs(self) -> Dict[bytes, List[str]]:
+        """``bData.pool`` key -> labels (``archive/entry/dref``) of its references in disc order."""
+        if self._pool_refs is None:
+            refs: Dict[bytes, List[str]] = {}
+            if self.data_pool is not None:
+                for archive, entry in self.iter_entries():
+                    data = self.read_entry(archive, entry)
+                    pkg = parse_package(data)
+                    if pkg:
+                        self._add_pool_refs(refs, f"{self.archive_label(archive)}/{entry.name}", data, pkg)
+            self._pool_refs = refs
+        return self._pool_refs
 
     def _pool_loader(self, archive: Archive, entry: Entry, off: int, length: int):
         def load() -> bytes:
@@ -189,7 +223,37 @@ class GameData:
                 clips.append((other.rpartition("/")[2], decompress(archive.read_raw(e))))
         return ModelParts(name, self.archive_label(archive), folder, parts, clips)
 
+    def _read_pool_package(self, key: bytes) -> Dict[str, bytes]:
+        data = self.data_pool.read(key)
+        return {p.path: data[p.offset:p.offset + p.length] for p in parse_package(data) or ()
+                if not p.attrib & FOLDER}
+
+    def shared_clips(self) -> Dict[Tuple[str, int], List[Tuple[str, bytes]]]:
+        """Clip sets of ``bData.pool`` (packages without geometry, such as ``ss2HgunAnims``)
+        by (level, channel count). A level loads them for all its characters with that rig."""
+        if self._shared_clips is None:
+            shared: Dict[Tuple[str, int], Dict[str, bytes]] = {}
+            refs = self.pool_refs()
+            for key in self.data_pool or ():
+                files = self._read_pool_package(key)
+                if not files or any(path.endswith("_ge") for path in files):
+                    continue
+                for path, clip in files.items():
+                    if not path.endswith("_an") or len(clip) < 4:
+                        continue
+                    obj = struct.unpack_from(">I", clip, 0)[0]
+                    if obj + 24 > len(clip):
+                        continue
+                    channels = struct.unpack_from(">I", clip, obj + 20)[0]
+                    for ref in refs.get(key, ()):
+                        shared.setdefault((level_of(ref), channels), {})[path[:-3].rsplit("/", 1)[-1]] = clip
+            self._shared_clips = {k: sorted(v.items()) for k, v in shared.items()}
+        return self._shared_clips
+
     def iter_models(self, filt: Optional[Callable[[str], bool]] = None) -> Iterator[ModelParts]:
+        """Every model on the disc. A ``bData.pool`` package is listed once, with the
+        resource that references it first; a filter may match any of its references."""
+        refs = self.pool_refs()
         for archive, entry in self.iter_entries():
             label = f"{self.archive_label(archive)}/{entry.name}"
             data = self.read_entry(archive, entry)
@@ -199,26 +263,55 @@ class GameData:
                     yield self._loose_model(archive, entry)
                 continue
             files = {p.path: data[p.offset:p.offset + p.length] for p in pkg if not p.attrib & FOLDER}
-            clips = self._package_clips(files)
-            sibling: Optional[List[Tuple[str, bytes]]] = None
-            stems = [path[:-3] for path in files if path.endswith("_ge")]
-            short = [s.rsplit("/", 1)[-1] for s in stems]
-            lowered = [s.lower() for s in short]  # output may land on a case-insensitive file system
-            for stem, name in zip(stems, short):
-                # Same model name in two package folders: keep the folder in the name.
-                if lowered.count(name.lower()) > 1:
-                    name = stem.replace("/", "__")
-                model_label = f"{label}/{stem}"
-                if filt is not None and not filt(model_label):
-                    continue
-                parts = {sfx: files[stem + "_" + sfx] for sfx in ("su", "ge", "si", "an", "cl", "nm")
-                         if stem + "_" + sfx in files}
-                model_clips = list(clips.get(stem.rpartition("/")[0], []))
-                if "su" in parts:
-                    if sibling is None:
-                        sibling = self._sibling_clips(archive, entry)
-                    model_clips += sibling
-                yield ModelParts(name, self.archive_label(archive), entry.name, parts, model_clips)
+            groups = [(files, [label], True)]  # package files, labels to filter on, own package
+            for path, part in files.items():
+                ref = f"{label}/{path[:-5]}"
+                if path.endswith("_dref") and refs.get(part, [None])[0] == ref:
+                    groups.append((self._read_pool_package(part), refs[part], False))
+            yield from self._package_models(groups, archive, entry, filt)
+        for key in self.data_pool or ():
+            if key not in refs:
+                files = self._read_pool_package(key)
+                stems = sorted(path[:-3] for path in files if path.endswith("_ge"))
+                if stems:
+                    yield from self._package_models([(files, [f"bData/{stems[0]}"], False)], None,
+                                                    Entry(stems[0], 0, 0, 0, 0), filt, "bData")
+
+    def _package_models(self, groups, archive: Optional[Archive], entry: Entry, filt,
+                        archive_label: Optional[str] = None) -> Iterator[ModelParts]:
+        archive_label = archive_label or self.archive_label(archive)
+        models = [(stem, files, labels, own) for files, labels, own in groups
+                  for stem in (path[:-3] for path in files if path.endswith("_ge"))]
+        # output may land on a case-insensitive file system
+        lowered = [stem.rsplit("/", 1)[-1].lower() for stem, *_ in models]
+        sibling: Optional[List[Tuple[str, bytes]]] = None
+        clips_of: Dict[int, Dict[str, List[Tuple[str, bytes]]]] = {}
+        for (stem, files, labels, own), low in zip(models, lowered):
+            name = stem.rsplit("/", 1)[-1]
+            # Same model name twice in one resource: keep the folder or the reference in the name.
+            if lowered.count(low) > 1:
+                name = stem.replace("/", "__") if own else f"{labels[0].rsplit('/', 1)[-1]}__{name}"
+            listed = f"{archive_label}/{entry.name}/{stem}"  # as ``list`` prints it
+            if filt is not None and not (filt(listed) or any(filt(f"{lb}/{stem}") for lb in labels)):
+                continue
+            parts = {sfx: files[stem + "_" + sfx] for sfx in ("su", "ge", "si", "an", "cl", "nm")
+                     if stem + "_" + sfx in files}
+            if id(files) not in clips_of:
+                clips_of[id(files)] = self._package_clips(files)
+            model_clips = list(clips_of[id(files)].get(stem.rpartition("/")[0], []))
+            if own and "su" in parts and archive is not None:
+                if sibling is None:
+                    sibling = self._sibling_clips(archive, entry)
+                model_clips += sibling
+            if "su" in parts and len(parts["su"]) >= 36:
+                channels = struct.unpack_from(">I", parts["su"], 32)[0]
+                seen = {clip_name for clip_name, _ in model_clips}
+                for level in dict.fromkeys(level_of(lb) for lb in labels):
+                    for clip_name, clip in self.shared_clips().get((level, channels), ()):
+                        if clip_name not in seen:
+                            seen.add(clip_name)
+                            model_clips.append((clip_name, clip))
+            yield ModelParts(name, archive_label, entry.name, parts, model_clips)
 
 
 # Standalone image resources: 32-byte header {u16 width, u16 height, u8, u8 format,

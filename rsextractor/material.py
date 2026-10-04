@@ -9,6 +9,7 @@ Layout (RS2 FUN_7fd2c3c8)::
     +0x30 texture count (u32 in RS2, u8 in RS3)
     +0x34 texture records, 0x34 (RS2) / 0x48 (RS3) bytes each:
         +0x00 u16 width, +0x02 u16 height, +0x04 u8 mip count, +0x05 u8 GX format
+        (RS3 tags one CMPR texture, the Bespin sky, as 15)
         RS2 +0x14 / RS3 +0x34: SHA-1 of the texture (key into the texture pools)
     RS2 +0x104: six u16 slots mapping map types to texture indices (0xFF = unused)
 
@@ -20,6 +21,8 @@ import struct
 from dataclasses import dataclass, field
 from typing import List
 
+CMPR = 14
+FORMAT_ALIASES = {15: CMPR}  # data laid out exactly as GX CMPR
 
 @dataclass
 class TextureRef:
@@ -72,7 +75,8 @@ def parse_materials(si: bytes, game: int = 2) -> List[Material]:
             if r + rec > base + size:
                 break
             w, h, mips, fmt = struct.unpack_from(">HHBB", si, r)
-            textures.append(TextureRef(w, h, mips, fmt, si[r + hash_off:r + hash_off + 20]))
+            textures.append(TextureRef(w, h, mips, FORMAT_ALIASES.get(fmt, fmt),
+                                       si[r + hash_off:r + hash_off + 20]))
         out.append(Material(name, mtype, flags, _rgba(si, base + color_off), _rgba(si, base + color_off + 4),
                             textures))
     return out

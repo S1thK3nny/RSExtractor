@@ -8,8 +8,14 @@ hash -> raw GX texture bytes.
 
     "SMMJ", u32 count, then entries
       RS2: { u8 sha1[20], u32 byte_offset }                       (24 bytes)
-           offset bit 0x2000000: texture is shared from another pool (look up by hash)
+           offset >> 25: the texture is a lower mip of a larger one in the same pool;
+           its data starts after that many levels of a (w << n, h << n) chain at
+           ``offset & 0x1FFFFFF``
       RS3: { u8 sha1[20], u32 offset_in_32_byte_units, u8, u8, u16 } (28 bytes)
+           a non-zero top byte (one nibble per axis, 8 + shift) marks a texture
+           that is a lower mip of the texture stored at the same offset: 0x99 =
+           one level down. It is resolved through that texture, whose top levels
+           may be streamed from the global pool.
 
 RS3 local pools may hold only the lower mip levels of a texture (the u8 fields
 count the missing top levels); the full chain lives in ``gTexPool.cData``::
@@ -19,7 +25,9 @@ count the missing top levels); the full chain lives in ``gTexPool.cData``::
 
 Part A (top mips, may be empty) sits at ``file_offset``, part B at the next
 32-byte boundary; both use the LZ scheme in :func:`lz_decompress`
-(FUN_7f3e9ffc).  ``pool/global_tpool`` is the SMMJ index of the global pool.
+(FUN_7f3e9ffc). They hold the levels the local pools lack: B the lowest of them,
+A the one above. A part whose packed size equals that level's size is stored
+raw (the game then reads it straight into place, FUN_7f3e9604).  ``pool/global_tpool`` is the SMMJ index of the global pool.
 """
 from __future__ import annotations
 
@@ -76,6 +84,7 @@ class _Source:
     loader: Callable[[], bytes]
     offset: int
     missing_mips: int = 0
+    parent_levels: int = 0  # RS2: mip levels of the larger texture to skip
 
 
 class TextureLibrary:
@@ -84,12 +93,15 @@ class TextureLibrary:
         self._global: Dict[bytes, Tuple[int, int, int, int]] = {}  # hash -> ctp0 entry
         self._global_reader: Optional[Callable[[int, int], bytes]] = None
         self._cache: Dict[bytes, bytes] = {}
+        self._at: Dict[Tuple[int, int], bytes] = {}  # (pool, offset) -> hash stored there
+        self._alias: Dict[bytes, Tuple[Tuple[int, int], int]] = {}  # hash -> ((pool, offset), levels)
+        self._alias_missing: Dict[bytes, int] = {}
 
     def __len__(self) -> int:
-        return len(set(self._local) | set(self._global))
+        return len(set(self._local) | set(self._global) | set(self._alias))
 
     def __contains__(self, h: bytes) -> bool:
-        return h in self._local or h in self._global
+        return h in self._local or h in self._global or h in self._alias
 
     # -- registration
     def add_pool(self, tpi: bytes, tpd: bytes | Callable[[], bytes], game: int) -> int:
@@ -105,15 +117,20 @@ class TextureLibrary:
                 break
             h = tpi[e:e + 20]
             off = struct.unpack_from(">I", tpi, e + 20)[0]
-            if game == 2 and off & 0x2000000:
-                continue  # data lives in another (resident) pool; resolved by hash elsewhere
-            missing = 0
-            if game == 3:
-                off *= 32
+            missing = parent = 0
+            if game == 2:
+                off, parent = off & 0x1FFFFFF, off >> 25
+            else:
+                scale, off = off >> 24, (off & 0xFFFFFF) * 32
                 missing = tpi[e + 24]
+                if scale:
+                    if scale & 0x88 == 0x88 and (scale >> 4) & 7 == scale & 7:
+                        self._alias.setdefault(h, ((id(loader), off), scale & 7))
+                    continue
+                self._at.setdefault((id(loader), off), h)
             prev = self._local.get(h)
-            if prev is None or missing < prev.missing_mips:
-                self._local[h] = _Source(loader, off, missing)
+            if prev is None or (missing, parent) < (prev.missing_mips, prev.parent_levels):
+                self._local[h] = _Source(loader, off, missing, parent)
                 added += 1
         return added
 
@@ -141,27 +158,62 @@ class TextureLibrary:
         h = ref.hash
         if h in self._cache:
             return self._cache[h]
+        if ref.format not in gx.BLOCK:
+            return None
         need = gx.texture_size(ref.format, ref.width, ref.height, ref.mips)
         data = None
         if h in self._global and self._global_reader is not None:
             _, file_off, size_a, size_b = self._global[h]
+            local = self._local.get(h)
+            top = local.missing_mips if local and local.missing_mips else (2 if size_a else 1)
             parts = []
-            if size_a:
-                parts.append(lz_decompress(self._global_reader(file_off, size_a)))
-            if size_b:
-                parts.append(lz_decompress(self._global_reader(file_off + ((size_a + 31) & ~31), size_b)))
+            for level, off, size in ((top - 2, file_off, size_a),
+                                     (top - 1, file_off + ((size_a + 31) & ~31), size_b)):
+                if not size:
+                    continue
+                packed = self._global_reader(off, size)
+                raw = level >= 0 and ref.format in gx.BLOCK and size == gx.level_size(ref.format, max(ref.width >> level, 1),
+                                                           max(ref.height >> level, 1))
+                parts.append(packed if raw else lz_decompress(packed))
+            if local is not None and local.missing_mips == top:  # the local pool has the levels below
+                blob = local.loader()
+                rest = need - sum(len(part) for part in parts)
+                parts.append(blob[local.offset:local.offset + max(rest, 0)])
             data = b"".join(parts)
         if (data is None or len(data) < gx.level_size(ref.format, ref.width, ref.height)) and h in self._local:
             src = self._local[h]
             blob = src.loader()
-            data = blob[src.offset:src.offset + need]  # starts at mip ``missing_mips``
+            off = src.offset + sum(gx.level_size(ref.format, ref.width << (src.parent_levels - i),
+                                                 ref.height << (src.parent_levels - i))
+                                   for i in range(src.parent_levels))
+            data = blob[off:off + need]  # starts at mip ``missing_mips``
+        if data is None and h in self._alias:
+            data = self._raw_alias(ref)
         if data is not None:
             self._cache[h] = data
         return data
 
+    def _raw_alias(self, ref: TextureRef) -> Optional[bytes]:
+        """RS3: ``ref`` is mip ``n`` of the texture stored at the same pool offset."""
+        key, n = self._alias[ref.hash]
+        parent = self._at.get(key)
+        if parent is None:
+            return None
+        pref = TextureRef(ref.width << n, ref.height << n, ref.mips + n, ref.format, parent)
+        data = self.raw(pref)
+        if data is None:
+            return None
+        have = self.missing_mips(pref)
+        drop = sum(gx.level_size(ref.format, max(pref.width >> i, 1), max(pref.height >> i, 1))
+                   for i in range(have, n))
+        self._alias_missing[ref.hash] = max(have - n, 0)
+        return data[drop:]
+
     def missing_mips(self, ref: TextureRef) -> int:
         """Number of top mip levels absent from the bytes returned by :meth:`raw`."""
         h = ref.hash
+        if h in self._alias_missing:
+            return self._alias_missing[h]
         if h in self._global:
             return 0
         src = self._local.get(h)

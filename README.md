@@ -45,6 +45,15 @@ Output layout: `output/RS<n>/<archive>/<resource>/<model>.fbx` with the
 model's textures in `.../<resource>/textures/`. Player craft live under
 `data/plCraft/...`, level content under `lvlPackNN/...`.
 
+Rebel Strike keeps most level models (walkers, troopers, buildings, props) in
+the shared `bData.pool`, referenced from the levels. Each one is written once,
+next to the first level resource that uses it (the AT-AT lands in
+`lvlPack02/L_03_Ralltiir_lvl/01c01/fltATAT_ai.fbx` and
+`lvlPack02/L_06_Hoth_lvl/01/grndATAT_ai.fbx`); `-f` with the name of any level
+that uses a model selects it too. The few pool models no level references go to
+`bData/<model>/`. Characters also get the shared clip sets their levels load
+(run, crouch, death ... for stormtroopers, officers, Ewoks, Jawas).
+
 Models with levels of detail get one empty per level (`<model>_LOD0`,
 `<model>_LOD1`, ...) holding that level's meshes, which carry the same suffix
 (`<model>_07_LOD1`; `_LOD2_3` = shown in LOD2 and LOD3). Meshes drawn at every
@@ -79,7 +88,8 @@ Units are metres (1 game unit = 1 m), Y up.
 | Articulated models (walkers, troopers, turrets) assembled from their node hierarchy | yes | yes |
 | Skeletons / skin weights in the FBX | yes | yes (capes lie flat as stored; the game simulates cloth) |
 | Animations (`_an`), including IK driven walkers | yes | yes |
-| Terrain heightmaps (`h16_*.img`), level object placement (`dref`) | no | no |
+| Level models from the shared pool (`bData.pool`) | n/a | yes |
+| Terrain heightmaps (`h16_*.img`), level object placement | no | no |
 | Sounds | no | no |
 
 Format notes: [docs/FORMATS.md](docs/FORMATS.md).
