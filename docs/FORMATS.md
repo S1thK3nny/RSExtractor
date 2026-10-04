@@ -101,6 +101,10 @@ turns: one turn maps +X to -Z and +Z to +X (`FUN_7f35c8ec` precomputes the four
 matrices, `FUN_7f35def0` draws). `bmap` has one 0x24 byte record per tile type,
 `{u32 count, u32 building[8]}` (building type in the low half), and the tile's
 `t###_0_lm` gives the matrix of each building relative to the tile.
+The `tile##_dref` / `bldg##_dref` parts may sit in another resource of the level
+(the Death Star maps in `X_lvl/01` use the tiles referenced by `X_lvl/00`).
+Adjacent tiles meet seamlessly in this layout (roads on Bespin run across the
+cell edges).
 
 ## Geometry `_ge`
 

@@ -109,6 +109,20 @@ def cmd_extract(args) -> int:
         progress.clear()
         if pool is not None:
             pool.shutdown()
+        if not args.no_tile_levels:
+            print("Assembling tile levels...")
+            for level in game.iter_tile_levels(_filter(args.filter)):
+                label = f"{level.archive}/{level.entry}"
+                progress.show(1.0, f"tile level  {label}")
+                try:
+                    exporter.export_tile_level(level)
+                except Exception as exc:
+                    failures += 1
+                    progress.clear()
+                    print(f"  FAILED tile level {label}: {exc}", file=sys.stderr, flush=True)
+                    if args.verbose:
+                        traceback.print_exc()
+            progress.clear()
         images = 0
         if not args.no_images:
             print("Exporting standalone images...")
@@ -120,11 +134,22 @@ def cmd_extract(args) -> int:
             print("Textures not found:")
             for line in sorted(set(exporter.missing)):
                 print(f"  {line}")
-        print(f"Done in {time.time() - t0:.0f}s: {s['models']} models ({s['skeletons']} with skeletons, "
-              f"{s['animations']} animations), {s['textures']} textures, {s['normal_maps']} normal maps, {s['emissive_maps']} emissive maps, "
-              f"{s['specular_maps']} specular maps, {s['environment_maps']} environment maps, "
-              f"{images} images, {s['skipped']} empty models skipped, "
-              f"{s['missing_textures']} textures not found, {failures} failures")
+        summary = [
+            f"{s['models']} models ({s['skeletons']} with skeletons, {s['animations']} animations)",
+            f"{s['textures']} textures",
+            f"{s['normal_maps']} normal maps",
+            f"{s['emissive_maps']} emissive maps",
+            f"{s['specular_maps']} specular maps",
+            f"{s['environment_maps']} environment maps",
+            f"{s['tile_levels']} tile levels",
+            f"{images} images",
+            f"{s['skipped']} empty models skipped",
+            f"{s['missing_textures']} textures not found",
+            f"{failures} failures",
+        ]
+        print(f"Done in {time.time() - t0:.0f}s:")
+        for line in summary:
+            print(f"\t- {line}")
     return 1 if failures else 0
 
 
@@ -150,6 +175,8 @@ def main(argv=None) -> int:
                     help="file format for textures and standalone images (default: png)")
     pe.add_argument("--embed", action="store_true", help="embed textures inside the FBX files")
     pe.add_argument("--no-images", action="store_true", help="skip standalone images (menus, backdrops, fonts)")
+    pe.add_argument("--no-tile-levels", action="store_true",
+                    help="skip assembling RS3 tile levels (Death Star, Bespin city ...) into one FBX each")
     pe.add_argument("--no-animations", action="store_true", help="export skeletons and skins but no animation clips")
     pe.add_argument("--no-skeletons", action="store_true", help="no bones, skins or animation (parts still keep their pivots)")
     pe.add_argument("-j", "--jobs", type=int, default=0,

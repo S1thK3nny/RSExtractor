@@ -42,6 +42,7 @@ SAMPLES = {
         "E_01_Luke_lvl/00/EndorSky": "RGBA8 sky",
         "B_02_Hoth_lvl/01/grndHothMedicalCenter": "I4 opacity and bump textures",
         "hangarCalamari_lvl/00/Awing_hangar": "reflective, masked highlight, level environment cube",
+        "coop_08_Bespin_lvl/02/tiles": "tile level layout (tmap, bmap, building matrices)",
     },
 }
 
@@ -79,9 +80,9 @@ def main() -> int:
             for line in proc.stdout:
                 print(line, end="", flush=True)
                 lines.append(line)
-        done = re.search(r"Done in .*", "".join(lines))
+        done = re.search(r"Done in .*", "".join(lines), re.S)
         fine = (proc.returncode == 0 and done is not None
-                and " 0 textures not found, 0 failures" in done.group())
+                and "\t- 0 textures not found\n" in done.group() and "\t- 0 failures" in done.group())
         print(f"   {'OK' if fine else 'FAILED'} in {time.time() - t0:.0f}s")
         ok &= fine
     return 0 if ok else 1

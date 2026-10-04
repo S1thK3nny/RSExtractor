@@ -67,6 +67,15 @@ that uses a model selects it too. The few pool models no level references go to
 `bData/<model>/`. Characters also get the shared clip sets their levels load
 (run, crouch, death ... for stormtroopers, officers, Ewoks, Jawas).
 
+Rebel Strike builds several levels from square tiles with buildings on them
+(both Death Star surfaces, the trench run, the Executor hull, Fondor, the
+Academy, Ralltiir, Bespin's cloud city). Each such level resource also gets the
+assembled layout, `<level>_<resource>_tiles.fbx`, with every tile and building
+copied into place at full detail; copies of the same mesh are merged per tile
+or building type, so Blender imports a few hundred objects. They are big (up to
+~170 MB for the largest Death Star map); `--no-tile-levels` skips them, and
+`-f /tiles` exports only them.
+
 Models with levels of detail get one empty per level (`<model>_LOD0`,
 `<model>_LOD1`, ...) holding that level's meshes, which carry the same suffix
 (`<model>_07_LOD1`; `_LOD2_3` = shown in LOD2 and LOD3). Meshes drawn at every
@@ -113,7 +122,8 @@ Units are metres (1 game unit = 1 m), Y up.
 | Skeletons / skin weights in the FBX | yes | yes (capes lie flat as stored; the game simulates cloth) |
 | Animations (`_an`), including IK driven walkers | yes | yes |
 | Level models from the shared pool (`bData.pool`) | n/a | yes |
-| Terrain heightmaps (`h16_*.img`), level object placement | no | no |
+| Tile levels assembled from their tile maps | n/a | yes |
+| Terrain heightmaps (`h16_*.img`), other level object placement | no | no |
 | Sounds | no | no |
 
 Format notes: [docs/FORMATS.md](docs/FORMATS.md).

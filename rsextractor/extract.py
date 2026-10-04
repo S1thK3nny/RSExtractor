@@ -23,6 +23,7 @@ from .rig import Rig, add_animations
 from .scene import Scene, SceneMaterial, SceneMesh, SceneNode
 from .skeleton import place_static_meshes
 from .texture import TextureLibrary
+from .tiles import parse_bmap, parse_lm, parse_tmap, tile_cells
 
 Log = Callable[[str], None]
 
@@ -83,6 +84,20 @@ class ModelParts:
     parts: Dict[str, bytes] = field(default_factory=dict)  # suffix -> bytes
     clips: List[Tuple[str, bytes]] = field(default_factory=list)  # animation clips next to the model
     envmap: Dict[str, bytes] = field(default_factory=dict)  # face -> image: the package's environment cube
+
+
+@dataclass
+class TileLevel:
+    """A level resource laid out from tiles (``tmap`` + ``bmap``) and the tile and
+    building models it uses (``t###_0``, ``b###_0``, by name)."""
+    archive: str
+    entry: str
+    tmap: bytes
+    bmap: bytes
+    models: Dict[str, Dict[str, bytes]] = field(default_factory=dict)  # name -> suffix -> part
+
+
+TILE_MODEL = re.compile(r"[tb]\d{3}_0$")
 
 
 def envmap_faces(files: Dict[str, bytes]) -> Dict[str, bytes]:
@@ -300,6 +315,42 @@ class GameData:
                                                 Entry(stems[0], 0, 0, 0, 0), filt, "bData")
         self.position = (total, total)
 
+    def iter_tile_levels(self, filt: Optional[Callable[[str], bool]] = None) -> Iterator[TileLevel]:
+        """Level resources with a tile map, matched by ``filt`` on ``archive/entry/tiles``."""
+        for archive, entry in self.iter_entries():
+            label = f"{self.archive_label(archive)}/{entry.name}"
+            if entry.name.endswith(("_tpi", "_tpd")) or (filt is not None and not filt(f"{label}/tiles")):
+                continue
+            data = self.read_entry(archive, entry)
+            pkg = parse_package(data)
+            if not pkg:
+                continue
+            files = {p.path: data[p.offset:p.offset + p.length] for p in pkg if not p.attrib & FOLDER}
+            if "tmap" not in files or "bmap" not in files:
+                continue
+            level = TileLevel(self.archive_label(archive), entry.name, files["tmap"], files["bmap"])
+            # The tiles may be referenced by another resource of the level (``X_lvl/00``).
+            directory = entry.name.split("/")[0] + "/"
+            siblings = [files]
+            for other in archive.files():
+                if other.name.startswith(directory) and other.name != entry.name:
+                    other_data = self.read_entry(archive, other)
+                    siblings.append({p.path: other_data[p.offset:p.offset + p.length]
+                                     for p in parse_package(other_data) or () if not p.attrib & FOLDER})
+            sources = []
+            for package in siblings:
+                sources.append(package)
+                sources += [self._read_pool_package(part) for path, part in package.items()
+                            if path.endswith("_dref") and self.data_pool is not None and part in self.data_pool]
+            for source in sources:
+                for path in source:
+                    stem = path[:-3]
+                    name = stem.rsplit("/", 1)[-1]
+                    if path.endswith("_ge") and TILE_MODEL.match(name) and name not in level.models:
+                        level.models[name] = {sfx: source[f"{stem}_{sfx}"] for sfx in ("su", "ge", "si", "nm", "lm")
+                                              if f"{stem}_{sfx}" in source}
+            yield level
+
     def _package_models(self, groups, archive: Optional[Archive], entry: Entry, filt,
                         archive_label: Optional[str] = None) -> Iterator[ModelParts]:
         archive_label = archive_label or self.archive_label(archive)
@@ -444,6 +495,29 @@ def _transform(positions: np.ndarray, normals: Optional[np.ndarray], m: np.ndarr
     return positions, normals
 
 
+def _merge_copies(mesh: Mesh, matrices: List[np.ndarray], name: str, material: int, node: int) -> SceneMesh:
+    """One scene mesh holding a copy of ``mesh`` transformed by each matrix."""
+    positions = np.asarray(mesh.positions, np.float64)
+    n = len(positions)
+    pos, nrm = [], []
+    for m in matrices:
+        pos.append(positions @ m[:3, :3].T + m[:3, 3])
+        if mesh.normals is not None:
+            nrm.append(np.asarray(mesh.normals, np.float32) @ m[:3, :3].T.astype(np.float32))
+    copies = len(matrices)
+    uvs = [mesh.uvs] + list(mesh.extra_uvs) if mesh.uvs is not None else []
+    return SceneMesh(
+        name=name,
+        positions=np.concatenate(pos),
+        triangles=np.concatenate([mesh.triangles + k * n for k in range(copies)]),
+        normals=np.concatenate(nrm) if nrm else None,
+        uvs=[np.tile(uv, (copies, 1)) for uv in uvs],
+        colors=np.tile(mesh.colors, (copies, 1)) if mesh.colors is not None else None,
+        material=material,
+        node=node,
+    )
+
+
 class Exporter:
     def __init__(self, game: GameData, out_dir: str, embed_textures: bool = False,
                  texture_format: str = "png", skeletons: bool = True, runtime: Optional[Runtime] = None,
@@ -459,7 +533,7 @@ class Exporter:
         self.log = log
         self.written_textures: Dict[str, str] = {}
         self.stats = {"models": 0, "skipped": 0, "textures": 0, "normal_maps": 0, "emissive_maps": 0,
-                      "specular_maps": 0, "environment_maps": 0, "missing_textures": 0,
+                      "specular_maps": 0, "environment_maps": 0, "tile_levels": 0, "missing_textures": 0,
                       "skeletons": 0, "animations": 0}
         self.missing: List[str] = []
         self.missing_hashes: set = set()
@@ -549,6 +623,79 @@ class Exporter:
         write_fbx(scene, path, embed_textures=self.embed)
         self.stats["models"] += 1
         return path
+
+    def export_tile_level(self, level: TileLevel) -> Optional[str]:
+        """One FBX with the whole tile layout: every tile and building copied into
+        place (full detail only). Copies of the same mesh are merged into one mesh per
+        tile or building type, so the scene has a few hundred objects, not one per cell."""
+        grids = parse_tmap(level.tmap)
+        buildings = parse_bmap(level.bmap)
+        if not grids:
+            return None
+        folder = os.path.join(self.out_dir, safe_name(level.archive), *[safe_name(p) for p in level.entry.split("/")])
+        os.makedirs(folder, exist_ok=True)
+        base = safe_name(f"{level.entry.split('/')[0]}_{level.entry.split('/')[-1]}_tiles")
+        scene = Scene(base)
+        scene.nodes.append(SceneNode(base))
+        groups = {"t": len(scene.nodes)}
+        scene.nodes.append(SceneNode(f"{base}_tiles", parent=0))
+        groups["b"] = len(scene.nodes)
+        scene.nodes.append(SceneNode(f"{base}_buildings", parent=0))
+        protos: Dict[str, list] = {}
+        placed: Dict[Tuple[str, int], List[np.ndarray]] = {}
+
+        def place(name: str, matrix: np.ndarray) -> None:
+            if name not in protos:
+                protos[name] = self._tile_prototype(level.models.get(name), name, folder, scene)
+            for k in range(len(protos[name])):
+                placed.setdefault((name, k), []).append(matrix)
+
+        for grid in grids:
+            for tile_type, matrix in tile_cells(grid):
+                tile = f"t{tile_type:03d}_0"
+                place(tile, matrix)
+                spots = parse_lm(level.models.get(tile, {}).get("lm", b""))
+                for building, spot in zip(buildings[tile_type] if tile_type < len(buildings) else [], spots):
+                    place(f"b{building:03d}_0", matrix @ spot)
+        for (name, k), matrices in placed.items():
+            mesh, material = protos[name][k]
+            scene.meshes.append(_merge_copies(mesh, matrices, f"{name}_{k:02d}", material, groups[name[0]]))
+        if not scene.meshes:
+            return None
+        path = os.path.join(folder, base + ".fbx")
+        write_fbx(scene, path, embed_textures=self.embed)
+        self.stats["tile_levels"] += 1
+        return path
+
+    def _tile_prototype(self, parts: Optional[Dict[str, bytes]], name: str, folder: str,
+                        scene: Scene) -> List[Tuple[Mesh, int]]:
+        """Full detail meshes of a tile or building in model space, with their scene materials."""
+        if not parts or "ge" not in parts:
+            self.log(f"  tile model {name} not found")
+            return []
+        geo = parse_geometry(parts["ge"], self.g.game, self.g.normal_table)
+        materials = parse_materials(parts.get("si", b""), self.g.game)
+        nodes = Rig.build(parts.get("su"), parts["ge"], self.g.game, parts.get("nm"))
+        if nodes is not None:
+            mesh_nodes, matrices, frames = nodes.part_layout(geo.meshes)
+            for mesh, node, matrix in zip(geo.meshes, mesh_nodes, matrices):
+                world = frames[node] @ matrix if node >= 0 else matrix
+                mesh.positions, mesh.normals = _transform(mesh.positions.astype(np.float64), mesh.normals, world)
+        else:
+            place_static_meshes(geo.meshes, parts.get("su"), parts["ge"], self.g.game)
+        out: List[Tuple[Mesh, int]] = []
+        mat_map: Dict[int, int] = {}
+        for mesh, label in zip(geo.meshes, lod_labels(geo.meshes)):
+            if label and not label.startswith("LOD0"):
+                continue
+            if mesh.material_index not in mat_map:
+                mat_map[mesh.material_index] = len(scene.materials)
+                mat = materials[mesh.material_index] if mesh.material_index < len(materials) else None
+                sm = self._material(mat, mesh.material_index, folder, name)
+                sm.name = f"{name}_{sm.name}"
+                scene.materials.append(sm)
+            out.append((mesh, mat_map[mesh.material_index]))
+        return out
 
     @staticmethod
     def _add_parts(scene: Scene, rig: Rig, layout, labels, lod_nodes: Dict[str, int], base: str) -> Dict[int, int]:
