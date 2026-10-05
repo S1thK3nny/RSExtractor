@@ -104,16 +104,65 @@ cells: u8[width * height], row major (index = column + row * width)
        0x1F = empty, else bits 0-4 tile type, bits 6-7 quarter turns
 ```
 
-A tile is drawn at `origin + column * size.x * axis_u + row * size.z * axis_v`
-(its centre; tiles span -size/2 .. size/2), rotated about Y by its quarter
-turns: one turn maps +X to -Z and +Z to +X (`FUN_7f35c8ec` precomputes the four
-matrices, `FUN_7f35def0` draws). `bmap` has one 0x24 byte record per tile type,
-`{u32 count, u32 building[8]}` (building type in the low half), and the tile's
-`t###_0_lm` gives the matrix of each building relative to the tile.
+`origin` is the corner of the grid. Tile models are centred (they span
+-size/2 .. size/2), so a tile's centre is
+`origin + (column + 0.5) * size.x * axis_u + (row + 0.5) * size.z * axis_v`, and
+it is rotated about Y by its quarter turns: one turn maps +X to -Z and +Z to +X
+(`FUN_7f35c8ec` precomputes the four matrices, `FUN_7f35def0` draws; the Death
+Star grid origins end in 50, so the centres fall on whole hundreds). The half
+cell was confirmed against the level objects (`dat`, see "Level objects"): the
+trench turrets stand on the trench floor and the surface only this way.
+`bmap` has one 0x24 byte record per tile type, `{u32 count, u32 building[8]}`
+(building type in the low half), and the tile's `t###_0_lm` gives the matrix of
+each building relative to the tile.
 The `tile##_dref` / `bldg##_dref` parts may sit in another resource of the level
 (the Death Star maps in `X_lvl/01` use the tiles referenced by `X_lvl/00`).
 Adjacent tiles meet seamlessly in this layout (roads on Bespin run across the
 cell edges).
+
+## Level objects `dat`
+
+Every level resource holds `dat` (with `dbg`, `spl`, `registry`, `sprgrp`,
+`veggrp`): the objects the level places. RS2 `FUN_7fc1ded4` and RS3
+`FUN_7f338410` relocate it; RS3 `FUN_7f33b35c` spawns one entity per record, a
+switch over the record's class. The part starts with (count, offset) pairs of
+record lists. The first pair (RS2 at +0x00, RS3 at +0x04) is the level's objects:
+`offset` points at a table of `count` u32 offsets, each relative to the table, to
+one record. RS3's list at +0x7C (RS2 +0x60) holds the 353 class templates, records
+of the same shape with default values; +0x6C indexes every record.
+
+Every record starts with the same header:
+
+```
++0x00 u16 class            +0x02 u16           +0x04 u16 own index
++0x0C u32 -> name           (relative to the record, 0 = none: player_StartPosition, PlayerRestart001)
++0x10 f32 position[3]
++0x1C f32 rotation[3]      degrees, applied X, then Y, then Z (Maya XYZ: R = Rz Ry Rx)
++0x28 f32 scale[3]
++0x3C u32 flags            bit 1: +0x4C is not a name
++0x4C u32 -> model name     (relative to the record)
++0x50 u32 -> second name    ground variant of a flight model (fltrebhothturret /
+                            grndrebhothturret) or, for characters, their clip set
+```
+
+The class data follows; RS3's table at `0x7F66CF70` (0x3C bytes per class) holds
+the offset of each component block inside a record of that class (the block at
++0x3C is the header above). The rotation order comes from the Death Star trench:
+the turrets on the trench walls, (270, 360, 90) at z = 50 and (90, 0, 270) at
+z = -50, face into the trench only when X turns before Z. A level shows the
+first of the two names its resources (or their pool packages) hold: flight
+levels have the `flt` models, ground levels the `grnd` ones. Of RS3's 21871
+objects with a name 21605 resolve within their level and 59 more outside the
+levels (`data/staticGame`, `data/plCraft`); RS2 resolves 6733 of 6950. The rest
+are sound emitters (`aobj_*`), debug arrows and boxes, landing cone effects and
+cutscene references.
+
+Capital ship parts are not placed this way: the RS2 Star Destroyer's record
+lists its parts by object index at +0xE0 (`gfxsdballleft`, `gfxsdballright`,
+`gfxsdballbig`, `sdcommdeck`, `sdsmallgun`) and their own records hold no
+usable pose (zero, or far from the hull); the hull model has 61 hardpoint nodes
+(the sensor balls' at (±96, 189, -575)) the game mounts them on. Which part
+goes on which node is still open.
 
 ## Geometry `_ge`
 

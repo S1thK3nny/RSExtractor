@@ -85,12 +85,15 @@ def quarter_turns(k: int) -> np.ndarray:
 
 
 def tile_cells(grid: TileGrid) -> Iterator[Tuple[int, np.ndarray]]:
-    """(tile type, world matrix) of every filled cell; tiles are centred on their cell."""
+    """(tile type, world matrix) of every filled cell. The origin is the grid's corner;
+    tile models are centred, so each sits half a cell in from its cell's corner (the
+    level objects in ``dat`` line up with the tiles only this way)."""
     for row in range(grid.height):
         for col in range(grid.width):
             cell = grid.cells[col + row * grid.width]
             if cell & 0x1F == EMPTY:
                 continue
             m = quarter_turns(cell >> 6)
-            m[:3, 3] = grid.origin + col * grid.size[0] * grid.axis_u + row * grid.size[2] * grid.axis_v
+            m[:3, 3] = (grid.origin + (col + 0.5) * grid.size[0] * grid.axis_u
+                        + (row + 0.5) * grid.size[2] * grid.axis_v)
             yield cell & 0x1F, m

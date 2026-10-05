@@ -20,6 +20,7 @@ from .fbx import write_fbx
 from .material import Material, parse_materials, specular_exponent
 from .anim import Runtime
 from .model import Mesh, parse_geometry
+from .placement import Placed, parse_dat
 from .rig import Rig, add_animations
 from .scene import Scene, SceneMaterial, SceneMesh, SceneNode
 from .skeleton import place_static_meshes
@@ -98,6 +99,16 @@ class TileLevel:
     models: Dict[str, Dict[str, bytes]] = field(default_factory=dict)  # name -> suffix -> part
 
 
+@dataclass
+class ObjectLevel:
+    """A level resource's placed objects (``dat``) and the models they name, by lower
+    case name, from the resources of the same level and their ``bData.pool`` packages."""
+    archive: str
+    entry: str
+    objects: List[Placed]
+    models: Dict[str, Dict[str, bytes]] = field(default_factory=dict)
+
+
 TILE_MODEL = re.compile(r"[tb]\d{3}_0$")
 # Briefing and HUD wireframes (RS2 gfxWIREOverlays*, RS3 wireOverlay*): drawn from the collision hull.
 WIRE_OVERLAY = re.compile(r"wireoverlay", re.I)
@@ -156,6 +167,7 @@ class GameData:
         self.data_pool = DataPool(disc) if disc.exists("bData.pool") else None
         self._pool_refs: Optional[Dict[bytes, List[str]]] = None
         self._shared_clips: Optional[Dict[Tuple[str, int], List[Tuple[str, bytes]]]] = None
+        self._outside_models: Optional[Dict[str, Tuple[Archive, Entry, str]]] = None
         # model name (lower case) -> [(levels or None for any, channels, clip name, clip)]
         self._actor_clips: Dict[str, List[Tuple[Optional[set], int, str, bytes]]] = {}
         self._cache: "OrderedDict[Tuple[str, str], bytes]" = OrderedDict()
@@ -408,19 +420,7 @@ class GameData:
             if "tmap" not in files or "bmap" not in files:
                 continue
             level = TileLevel(self.archive_label(archive), entry.name, files["tmap"], files["bmap"])
-            # The tiles may be referenced by another resource of the level (``X_lvl/00``).
-            directory = entry.name.split("/")[0] + "/"
-            siblings = [files]
-            for other in archive.files():
-                if other.name.startswith(directory) and other.name != entry.name:
-                    other_data = self.read_entry(archive, other)
-                    siblings.append({p.path: other_data[p.offset:p.offset + p.length]
-                                     for p in parse_package(other_data) or () if not p.attrib & FOLDER})
-            sources = []
-            for package in siblings:
-                sources.append(package)
-                sources += [self._read_pool_package(part) for path, part in package.items()
-                            if path.endswith("_dref") and self.data_pool is not None and part in self.data_pool]
+            sources = self._level_sources(archive, entry, files)
             for source in sources:
                 for path in source:
                     stem = path[:-3]
@@ -429,6 +429,85 @@ class GameData:
                         level.models[name] = {sfx: source[f"{stem}_{sfx}"] for sfx in ("su", "ge", "si", "nm", "lm")
                                               if f"{stem}_{sfx}" in source}
             yield level
+
+    def _level_sources(self, archive: Archive, entry: Entry, files: Dict[str, bytes]) -> List[Dict[str, bytes]]:
+        """A level resource's package, the other resources of its level (the tiles of
+        ``X_lvl/01`` may be referenced by ``X_lvl/00``) and the pool packages they reference."""
+        directory = entry.name.split("/")[0] + "/"
+        siblings = [files]
+        for other in archive.files():
+            if other.name.startswith(directory) and other.name != entry.name and not other.name.endswith(("_tpi", "_tpd")):
+                other_data = self.read_entry(archive, other)
+                siblings.append({p.path: other_data[p.offset:p.offset + p.length]
+                                 for p in parse_package(other_data) or () if not p.attrib & FOLDER})
+        sources = []
+        for package in siblings:
+            sources.append(package)
+            sources += [self._read_pool_package(part) for path, part in package.items()
+                        if path.endswith("_dref") and self.data_pool is not None and part in self.data_pool]
+        return sources
+
+    def iter_object_levels(self, filt: Optional[Callable[[str], bool]] = None) -> Iterator[ObjectLevel]:
+        """Level resources with placed objects, matched by ``filt`` on ``archive/entry/objects``."""
+        for archive, entry in self.iter_entries():
+            label = f"{self.archive_label(archive)}/{entry.name}"
+            if entry.name.endswith(("_tpi", "_tpd")) or (filt is not None and not filt(f"{label}/objects")):
+                continue
+            data = self.read_entry(archive, entry)
+            pkg = parse_package(data)
+            if not pkg:
+                continue
+            files = {p.path: data[p.offset:p.offset + p.length] for p in pkg if not p.attrib & FOLDER}
+            objects = parse_dat(files.get("dat", b""), self.game)
+            if not objects:
+                continue
+            level = ObjectLevel(self.archive_label(archive), entry.name, objects)
+            available: Dict[str, Tuple[Dict[str, bytes], str]] = {}
+            for source in self._level_sources(archive, entry, files):
+                for path in source:
+                    if path.endswith("_ge"):
+                        available.setdefault(path[:-3].rsplit("/", 1)[-1].lower(), (source, path[:-3]))
+            for obj in objects:
+                name = self._object_model(obj, available)
+                if name is None or name in level.models:
+                    continue
+                if name in available:
+                    source, stem = available[name]
+                    level.models[name] = {sfx: source[f"{stem}_{sfx}"] for sfx in ("su", "ge", "si", "nm")
+                                          if f"{stem}_{sfx}" in source}
+                else:
+                    level.models[name] = self._outside_model(name)
+            yield level
+
+    def _object_model(self, obj: Placed, available) -> Optional[str]:
+        """The model an object shows: the first of its names (flight variant first) the
+        level has, else one found outside the levels (``data``)."""
+        names = [n.lower() for n in obj.names]
+        for name in names:
+            if name in available:
+                return name
+        outside = self.outside_models()
+        return next((name for name in names if name in outside), None)
+
+    def outside_models(self) -> Dict[str, Tuple[Archive, Entry, str]]:
+        """Models of packages outside the levels (``data/plCraft``, ``data/staticGame``), by lower case name."""
+        if self._outside_models is None:
+            self._outside_models = {}
+            for archive, entry in self.iter_entries():
+                if "_lvl/" in entry.name or entry.name.endswith(("_tpi", "_tpd")):
+                    continue
+                pkg = parse_package(self.read_entry(archive, entry))
+                for p in pkg or ():
+                    if p.path.endswith("_ge"):
+                        self._outside_models.setdefault(p.path[:-3].rsplit("/", 1)[-1].lower(),
+                                                        (archive, entry, p.path[:-3]))
+        return self._outside_models
+
+    def _outside_model(self, name: str) -> Dict[str, bytes]:
+        archive, entry, stem = self.outside_models()[name]
+        data = self.read_entry(archive, entry)
+        files = {p.path: data[p.offset:p.offset + p.length] for p in parse_package(data) if not p.attrib & FOLDER}
+        return {sfx: files[f"{stem}_{sfx}"] for sfx in ("su", "ge", "si", "nm") if f"{stem}_{sfx}" in files}
 
     def _package_models(self, groups, archive: Optional[Archive], entry: Entry, filt,
                         archive_label: Optional[str] = None) -> Iterator[ModelParts]:
@@ -622,7 +701,7 @@ class Exporter:
         self.log = log
         self.written_textures: Dict[str, str] = {}
         self.stats = {"models": 0, "skipped": 0, "textures": 0, "normal_maps": 0, "emissive_maps": 0,
-                      "specular_maps": 0, "environment_maps": 0, "tile_levels": 0, "missing_textures": 0,
+                      "specular_maps": 0, "environment_maps": 0, "tile_levels": 0, "object_levels": 0, "missing_textures": 0,
                       "skeletons": 0, "animations": 0, "wireframes": 0}
         self.missing: List[str] = []
         self.missing_hashes: set = set()
@@ -761,7 +840,7 @@ class Exporter:
 
         def place(name: str, matrix: np.ndarray) -> None:
             if name not in protos:
-                protos[name] = self._tile_prototype(level.models.get(name), name, folder, scene)
+                protos[name] = self._prototype(level.models.get(name), name, folder, scene)
             for k in range(len(protos[name])):
                 placed.setdefault((name, k), []).append(matrix)
 
@@ -782,11 +861,44 @@ class Exporter:
         self.stats["tile_levels"] += 1
         return path
 
-    def _tile_prototype(self, parts: Optional[Dict[str, bytes]], name: str, folder: str,
-                        scene: Scene) -> List[Tuple[Mesh, int]]:
-        """Full detail meshes of a tile or building in model space, with their scene materials."""
+    def export_object_level(self, level: ObjectLevel) -> Optional[str]:
+        """One FBX with the objects a level resource places (``dat``): every placed model
+        copied into place at full detail, copies of the same mesh merged into one mesh,
+        under one empty per model."""
+        folder = os.path.join(self.out_dir, safe_name(level.archive), *[safe_name(p) for p in level.entry.split("/")])
+        os.makedirs(folder, exist_ok=True)
+        base = safe_name(f"{level.entry.split('/')[0]}_{level.entry.split('/')[-1]}_objects")
+        scene = Scene(base)
+        scene.nodes.append(SceneNode(base))
+        protos: Dict[str, list] = {}
+        groups: Dict[str, int] = {}
+        placed: Dict[Tuple[str, int], List[np.ndarray]] = {}
+        for obj in level.objects:
+            name = self.g._object_model(obj, level.models)
+            if name is None:
+                continue
+            if name not in protos:
+                protos[name] = self._prototype(level.models.get(name), name, folder, scene)
+                groups[name] = len(scene.nodes)
+                scene.nodes.append(SceneNode(safe_name(name), parent=0))
+            for k in range(len(protos[name])):
+                placed.setdefault((name, k), []).append(obj.matrix)
+        for (name, k), matrices in placed.items():
+            mesh, material = protos[name][k]
+            scene.meshes.append(_merge_copies(mesh, matrices, f"{safe_name(name)}_{k:02d}", material, groups[name]))
+        if not scene.meshes:
+            return None
+        path = os.path.join(folder, base + ".fbx")
+        write_fbx(scene, path, embed_textures=self.embed)
+        self.stats["object_levels"] += 1
+        return path
+
+    def _prototype(self, parts: Optional[Dict[str, bytes]], name: str, folder: str,
+                   scene: Scene) -> List[Tuple[Mesh, int]]:
+        """Full detail meshes of a model in model space (rigid parts at rest, skins in
+        bind pose), with their scene materials."""
         if not parts or "ge" not in parts:
-            self.log(f"  tile model {name} not found")
+            self.log(f"  model {name} not found")
             return []
         geo = parse_geometry(parts["ge"], self.g.game, self.g.normal_table)
         materials = parse_materials(parts.get("si", b""), self.g.game)
@@ -794,6 +906,9 @@ class Exporter:
         if nodes is not None:
             mesh_nodes, matrices, frames = nodes.part_layout(geo.meshes)
             for mesh, node, matrix in zip(geo.meshes, mesh_nodes, matrices):
+                if node < 0 and nodes.is_skinned([mesh]):
+                    mesh.positions, mesh.normals = nodes.skin(mesh, 0)[:2]
+                    continue
                 world = frames[node] @ matrix if node >= 0 else matrix
                 mesh.positions, mesh.normals = _transform(mesh.positions.astype(np.float64), mesh.normals, world)
                 mesh.triangles = _wind(mesh.triangles, world)
@@ -936,7 +1051,7 @@ class Exporter:
 
     def _image_file(self, folder: str, stem: str, key: str, kind: str,
                     make: Callable[[], Optional[np.ndarray]]) -> Optional[str]:
-        """Write ``make()`` as ``folder/textures/stem`` once per ``key`` (later uses copy the file)."""
+        """Write ``make()`` as ``folder/textures/stem`` once per ``key`` (later uses link or copy the file)."""
         fname = f"{stem}.{self.texture_format}"
         rel = f"textures/{fname}"
         target = os.path.join(folder, "textures", fname)
@@ -957,6 +1072,9 @@ class Exporter:
         if not source:
             return None
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(source, "rb") as src, open(target, "wb") as dst:
-            dst.write(src.read())
+        try:  # a hard link keeps every folder complete without storing the image twice
+            os.link(source, target)
+        except OSError:
+            with open(source, "rb") as src, open(target, "wb") as dst:
+                dst.write(src.read())
         return rel

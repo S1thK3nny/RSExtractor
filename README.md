@@ -79,6 +79,16 @@ or building type, so Blender imports a few hundred objects. They are big (up to
 ~170 MB for the largest Death Star map); `--no-tile-levels` skips them, and
 `-f /tiles` exports only them.
 
+Every level resource of both games also gets the objects it places (turrets,
+walkers, buildings, crates, troopers, rocks, asteroids ...) in
+`<level>_<resource>_objects.fbx`: each placed model copied into place at full
+detail, copies of the same mesh merged, one empty per model. Characters stand in
+their bind pose. They share the coordinates of the tile level next to them, so
+importing both gives the trench with its turrets and barriers. `--no-object-levels`
+skips them, and `-f /objects` exports only them. Not placed yet: the parts the
+game mounts on capital ships (the Star Destroyer's sensor balls, command deck
+and guns), sound emitters and effects.
+
 Models with levels of detail get one empty per level (`<model>_LOD0`,
 `<model>_LOD1`, ...) holding that level's meshes, which carry the same suffix
 (`<model>_07_LOD1`; `_LOD2_3` = shown in LOD2 and LOD3). Meshes drawn at every
@@ -135,7 +145,8 @@ Units are metres (1 game unit = 1 m), Y up.
 | Level models from the shared pool (`bData.pool`) | n/a | yes |
 | Tile levels assembled from their tile maps | n/a | yes |
 | Briefing and HUD wireframes (from the collision hull) | yes | yes |
-| Terrain heightmaps (`h16_*.img`), other level object placement | no | no |
+| Level objects placed from `dat` (capital ship parts not yet) | yes | yes |
+| Terrain heightmaps (`h16_*.img`) | no | no |
 | Sounds | no | no |
 
 Format notes: [docs/FORMATS.md](docs/FORMATS.md).
