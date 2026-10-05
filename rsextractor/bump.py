@@ -65,6 +65,18 @@ def opaque(img: np.ndarray) -> np.ndarray:
     return out
 
 
+def additive(img: np.ndarray) -> np.ndarray:
+    """An added color as alpha blended color: alpha is the brightest channel and the
+    color is divided by it, so blending over black gives the original color and
+    black adds nothing (FBX has no additive blend mode)."""
+    rgb = img[..., :3].astype(np.float32)
+    a = rgb.max(axis=2, keepdims=True)
+    out = np.empty_like(img)
+    out[..., :3] = np.clip(np.rint(rgb * 255.0 / np.maximum(a, 1.0)), 0, 255).astype(np.uint8)
+    out[..., 3] = a[..., 0].astype(np.uint8)
+    return out
+
+
 def height_to_normal(h: np.ndarray) -> np.ndarray:
     du = (np.roll(h, -1, 1) - np.roll(h, 1, 1)) * 0.5
     dv = (np.roll(h, 1, 0) - np.roll(h, -1, 0)) * 0.5  # rows run down the image, v runs up

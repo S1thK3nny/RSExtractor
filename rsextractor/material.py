@@ -29,7 +29,8 @@ Layout (RS2 FUN_7fd2c3c8)::
     color map is a mask whose meaning depends on the slot: transparency, lit screens
     (alpha 0) or emboss grooves (alpha 0, craft hulls). Without such a slot it is unused.
 
-Flags 0x400 / 0x800 select clamped addressing in S / T (wrap otherwise).
+Flags 0x400 / 0x800 select clamped addressing in S / T (wrap otherwise). Flag 0x8000
+adds the color to what is behind (mostly sky layers and explosions).
 
 The shader is picked by the type (RS2) or by type bits (RS3, FUN_7f3d6430, mapped
 to the same numbering), see :func:`shader_index`. Lit shaders 4-8 and 16-19 have a
@@ -52,6 +53,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 from .bump import HEIGHT, TILT
+
+ADDITIVE = 0x8000  # material flag: blended by adding the color
 
 # map type -> slot per game
 OPACITY = {2: 1, 3: 2}
@@ -178,6 +181,11 @@ class Material:
     def self_lit(self) -> Optional[Tuple[int, bool]]:
         """(texture index, read alpha) of the mask whose 0 values make the color map shine."""
         return self._map(SELF_LIT)
+
+    @property
+    def additive(self) -> bool:
+        """Drawn by adding its color (flag 0x8000): star layers, horizon bands, explosions."""
+        return bool(self.flags & ADDITIVE)
 
     @property
     def clamp_s(self) -> bool:

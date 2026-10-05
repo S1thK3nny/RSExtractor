@@ -52,6 +52,9 @@ python -m rsextractor extract rs3.iso --no-skeletons
 
 # only the terrain of every level
 python -m rsextractor extract rs2.iso -f /terrain
+
+# only the full map of one level resource (terrain, tiles, objects, sky)
+python -m rsextractor extract rs2.iso -f l08/02/map
 ```
 
 Output layout: `output/RS<n>/<archive>/<resource>/<model>.fbx` with the
@@ -98,7 +101,10 @@ the first. The parts the game mounts on a host (the Star Destroyer's sensor
 balls, command deck and guns, the Bespin balloons' turbolasers, the gas
 platforms' containers) sit on the host's mount points; Rogue Leader's asteroid
 rocks are left out, since the asteroid fields scatter them at random while the
-level runs. Not placed: sound emitters and effects.
+level runs. Not placed: sound emitters and effects. Rebel Strike's indoor levels
+(hangars, Echo Base, the Death Star escape, the Yavin temple, Endor's bunker ...)
+build their walls and floors from rooms that a separate room list places; those
+rooms go into the same file under `<level>_<resource>_rooms`.
 
 Open levels of both games (Tatooine, Hoth, Yavin, Dantooine, Kothlis, Endor ...)
 get their terrain as `<level>_<resource>_terrain.fbx`: one mesh in metres, sharing
@@ -120,6 +126,26 @@ blender --python tools/blender_terrain.py -- output/RS2/lvlPack00/l00/01/l00_01_
 A terrain identical to one earlier in its level (Rogue Leader's four Tatooine
 lighting variants) is written once; levels sharing a terrain get hard links.
 `--no-terrain` skips terrain, `-f /terrain` exports only terrain.
+
+Every level resource also gets its whole map in one file,
+`<level>_<resource>_map.fbx`: the terrain, tiles and objects above, each under its
+own empty, plus the sky. Both games draw the sky around the camera (domes about
+140 m across, star layers, cloud rings, planets), so the map puts the sky under
+`<level>_<resource>_map_sky`, an empty centred on the level and scaled until the
+dome reaches 1.5 times past the level's edge; scale that empty to taste. Rogue
+Leader's skies are the models the game loads for the level and resource (`sky##`
+and its extras from the resource or `X/00`); Rebel Strike's are the sky packages
+and sky objects of the resource and `X_lvl/00`, without the horizon bands the game
+scales by code and with Tatooine's day sky of its four times of day. The skies
+leave the object FBXs. A map identical to an earlier one of its level is written
+once. The maps repeat the geometry of the separate files (Rebel Strike's Hoth
+battle map is ~420 MB); `--no-maps` skips them, `-f /map` exports only maps. In
+Blender raise the camera's clip end to see a whole map.
+
+Objects placed at height -FLT_MAX (the Academy's radar dishes) stand on the tiles
+or terrain below them. Materials the game blends by adding their color (star
+layers, horizon bands, explosions) are written with alpha equal to their brightest
+channel, so black adds nothing and the rest looks as in the game over a dark sky.
 
 Models with levels of detail get one empty per level (`<model>_LOD0`,
 `<model>_LOD1`, ...) holding that level's meshes, which carry the same suffix
@@ -179,6 +205,7 @@ Units are metres (1 game unit = 1 m), Y up.
 | Briefing and HUD wireframes (from the collision hull) | yes | yes |
 | Level objects placed from `dat`, capital ship parts on their mount points | yes | yes |
 | Terrain (heightmaps, baked ground texture, blend layers) | yes | yes |
+| Full maps (terrain, tiles, objects and sky in one FBX) | yes | yes |
 | Sounds | no | no |
 
 Format notes: [docs/FORMATS.md](docs/FORMATS.md).
@@ -194,12 +221,13 @@ web or engine pipelines.
 
 `tools/smoketest.py` extracts a handful of models per game that together cover
 every feature (skeletons, IK, pool models, streamed textures, every bump, opacity
-and self lit case) into `output/_test` in about a minute, instead of a full run
-(Rebel Strike alone writes ~10 GB in ~30 min). It fails on any failed model or
-missing texture:
+and self lit case, tile levels, objects, terrain and maps) into `output/_test` in
+about four minutes, instead of a full run (Rebel Strike alone writes ~10 GB in
+~30 min). It fails on any failed model or missing texture; arguments after `--` go
+to `extract`:
 
 ```
-python tools/smoketest.py rs2.iso rs3.iso
+python tools/smoketest.py rs2.iso rs3.iso -o output/_test -- -v
 ```
 
 `tools/fbxdump.py` is an independent FBX reader that validates the binary

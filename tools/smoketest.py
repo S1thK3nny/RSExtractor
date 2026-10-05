@@ -33,6 +33,8 @@ SAMPLES = {
         "l08/02/tiles": "RS2 tile level: _tile##/_bldg## models, buildings from the tile _lm",
         "l05/01/objects": "level objects (dat, RS2 header), Star Destroyer parts on hull nodes",
         "l08/02/terrain": "terrain from dat (centre and rings), mixmaps blend layers and bake",
+        "l08/02/map": "map: terrain, tiles, objects, sky08 with horizon rings 1 and 3 from l08/00",
+        "l07/02/map": "map: sky models of the second resource, Academy radar dishes dropped on the ground",
     },
     3: {
         "plCraft/xwing_base": "craft + cockpit: emboss from color alpha, self lit, animation, wireframe (compact hull records)",
@@ -53,6 +55,9 @@ SAMPLES = {
         "RAC_F_DeathStarTrench_lvl/01/tiles": "tile layout half a cell in from the grid corner (matches the objects)",
         "Training_lvl/01/terrain": "h16 terrain, levels 4..7, I4 blend masks",
         "B_03_Bespin_lvl/02/terrain": "mirrored h16 terrain (Bespin's underside)",
+        "W_02_Ep2_lvl/02/map": "map: sky object (class 249) package, additive star layer, horizon band left out",
+        "B_02_Hoth_lvl/03/map": "map: space level, sky package referenced twice",
+        "hangarCalamari_lvl/01/map": "map: indoor rooms placed by portals",
     },
 }
 
@@ -71,9 +76,10 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("isos", nargs="+")
     p.add_argument("-o", "--out", default=os.path.join("output", "_test"))
-    p.add_argument("extra", nargs=argparse.REMAINDER, help="after --: more arguments for extract")
-    args = p.parse_args()
-    extra = [a for a in args.extra if a != "--"]
+    # everything after -- goes to extract (an argparse remainder would also swallow -o)
+    argv = sys.argv[1:]
+    cut = argv.index("--") if "--" in argv else len(argv)
+    args, extra = p.parse_args(argv[:cut]), argv[cut + 1:]
     ok = True
     for iso in args.isos:
         game = game_of(iso)

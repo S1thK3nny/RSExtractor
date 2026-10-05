@@ -208,6 +208,77 @@ counter, any other kind is left to scripts). AI craft and wingmen at the origin
 (`tieai`, `xwing_wm`) are spawned this way too; where they start is not worked
 out yet.
 
+Indoor levels of Rebel Strike (hangars, Echo Base, the Death Star escape, the
+Yavin temple, Bespin, Endor's bunker, Ralltiir, Omega 4 ...: 29 resources) build
+their walls and floors from rooms that `dat` does not place. The resource's
+`portals` part does (`FUN_7f3a74b0` relocates it):
+
+```
++0x00 u16 zones, models, portals, rooms
++0x14 -> portal outline points (f32 x, z)   +0x18 -> zones (0x38: name[16], ..., +0x24 point list)
++0x1C -> models (0x54: name[0x40], +0x40 u16 index, +0x42 u16 flags; loaded by name, FUN_7f224fb4)
++0x20 -> portals (0x2C: +0x04 u16 zone, +0x0A u16 matrix, +0x0C u16 room)
++0x24 -> rooms (0xA0)                       +0x3C, +0x40 -> portal matrices (0x30 each)
+room: u16 index, u16 model, u16 first portal, u16 portals, u16 flags, u16,
+      f32 model -> level[3][4] (+0x0C), f32 level -> model[3][4] (+0x3C), +0x7C floor,
+      +0x80 world box (FUN_7f3a5ad4)
+```
+
+A model can serve several rooms. A room with flag 8 is the mirror image of
+another room with the same model and matrix, flipped under its floor (the loader
+negates the matrix's Y and moves it by twice the floor height) to fake reflective
+floors; the exporter leaves those out. The game loads `X_lvl/00` and one segment
+`X_lvl/NN` at a time (`FUN_7f31a568`), so a segment shows only its own rooms:
+Yavin `L_01_Yavin_lvl/05` lists 32 of the 78 temple rooms of `/04`, and 77 of its
+objects stand in halls only `/04` builds. Rogue Leader has no indoor levels.
+
+A height of -FLT_MAX (`0xFF7FFFFF`) stands for "on the ground": only Rogue
+Leader's Academy radar dishes (`l07`, class 92, `gfxacademyradar`) use it, and
+the exporter puts them on the highest tile or terrain surface below them.
+Rebel Strike sky objects (class 249, see "Skies") are drawn around the camera,
+not at their position.
+
+## Skies
+
+Both games draw the sky around the camera: the domes span about 140 units (sky00
+.. sky23, HothSky, R3StarSky: radius 137 .. 142) while the levels span thousands,
+so their position in the level means nothing.
+
+Rogue Leader's sky object (`FUN_7fd8c8fc`, set up by `FUN_7fd8bed4`) loads the
+model `sky%02d` of the level number (`DAT_7fde822c`, `lNN`) and adds models by
+level and by resource (`DAT_7fde8230`, resource number - 1), all drawn with model
+flags `0x10080`:
+
+| level | extra models |
+|-------|--------------|
+| 0, 3 | horizon |
+| 1, 16 | `sky01_pl`, `sky01_st`, `sky01_rm` |
+| 2 | `sky02_nb` |
+| 4 | `sky04_as1`, `sky04_as2`; resource 1 `gfxSkyMawPlanet`, `gfxSkyMawHoleOuter`, `gfxSkyMawHoleInner`, else `gfxSkyMaw2Atmosphere`, `gfxSkyMaw2HoleOuter`, `gfxSkyMaw2HoleInner` |
+| 5 | `sky05_pl` and an effect without a model (`FUN_7fced2fc`) |
+| 6 | horizon, `xptSkyKothlisSurfaceCloudsMd` |
+| 7 | resource 1 `gfxSkyPrefsbeltAtmosphere`; resource 2 `xptSkyPrefbeltDayClouds{Out,Mdl,Inr}` and the horizon without its rings |
+| 8 | horizon without `sky08hori2`; resource 1 `gfxSkyBespinCityVista`; fog layers `fogFloor` / `fogTopCity` |
+| 9, 10 | `sky09_pl`, `xptSkyEndorSky`, `sky09_st`, `sky09_ds`, `xptSkyEndorSun`, `xptSkyEndorRebels` |
+| 11 | none (rotates the dome) |
+| 12 | `gfxSkyAsteroidfieldField01`, `gfxSkyAsteroidfieldField02` |
+| 17 | `gfxSkyYavinSurfaceYavin`, `gfxSkyYavinSurfaceCrown`, horizon |
+
+The horizon (`FUN_7fd8c9b0`) loads the cloud rings `sky08hori1..3` and builds
+procedural cloud layers (`FUN_7fced518`) that have no model. The models sit in
+the resource or in `lNN/00` (`sky##/`, `extra/sky##/`).
+
+Rebel Strike builds its skies in per mission code (`FUN_7f37aad8` makes the Hoth
+sky for eight missions, `FUN_7f37a2c8` adds `HothCloudsOuter/Middle/Inner`, a
+`HothSky_horizonband` scaled by `FUN_7f3713dc` and procedural cloud layers by
+`FUN_7f376174`) and from sky objects, class 249: `FUN_7f33a1dc(0xf9, name)` makes
+one by name (Tatooine's `TatooineMorningSky`, `DaySky`, `SunsetSky` or
+`NightSky` by the time of day, `FUN_7f326760`) and `dat` places others
+(`r3starsky`, `hothspacesky`, `geonosissurfacesky`). The models are in `bData.pool`
+packages the resource or `X_lvl/00` references as `<name>sky_dref` or
+`extra/<Name>Sky_dref`. Star layers and horizon bands are drawn additively
+(material flag `0x8000`).
+
 ## Terrain
 
 Both games draw the ground of open levels as a heightfield in nested levels of
@@ -422,7 +493,12 @@ its shader table is at `0x7f672aa8`. A map naming the color texture reads its al
 bit alpha of a CMPR color map is a mask whose meaning depends on the slot: cut out
 or blended transparency (trees, engine glow sprites), lit screens and buttons
 (alpha 0) or emboss grooves (alpha 0, hulls). Without such a slot the game draws
-the texture opaque and ignores its alpha. Neither game stores texture names:
+the texture opaque and ignores its alpha. Flag `0x8000` adds the color instead
+of blending it (10 RS2 materials: explosions, the Death Star firewall; 43 RS3
+ones, the 22 of them without an opacity map nearly all sky star layers and
+horizon bands). Without an opacity map the exporter writes such a color map with
+alpha = its brightest channel and the color divided by it, which gives the same
+result over black. Neither game stores texture names:
 materials keep the Maya shader name (`phong31`), textures only a SHA-1.
 
 ### Highlights and reflections

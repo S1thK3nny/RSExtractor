@@ -19,7 +19,10 @@ same header::
 
 The class data follows (the game's per class table at ``0x7F66CF70`` holds the
 offsets of each block). Records without a model (start points, triggers,
-splines, effects) are skipped here.
+splines, effects) are skipped here. A height of -FLT_MAX puts the object on the
+ground below it (``Placed.on_ground``).
+
+Indoor levels (RS3) place their rooms in ``portals`` instead (``parse_portals``).
 
 Capital ships, towers and platforms do not place their parts by pose: their
 spawn code (``MOUNTS``) puts each part on a node (RS2) or a named locator (RS3)
@@ -43,6 +46,11 @@ class Placed:
     matrix: np.ndarray      # 4x4, model space -> level; for a mounted part only its scale
     # (host's index in the list, host ``_su`` node (RS2) or locator name (RS3))
     mount: Optional[Tuple[int, Union[int, str]]] = None
+
+    @property
+    def on_ground(self) -> bool:
+        """Height -FLT_MAX: stands on whatever is below it (the Academy radar dishes of RS2 ``l07``)."""
+        return bool(self.matrix[1, 3] < -1e30)
 
 
 def _nodes(*game_nodes: int) -> List[int]:
@@ -161,6 +169,42 @@ def parse_dat(dat: bytes, game: int) -> List[Placed]:
         if host in position and names:
             for frame in frames:
                 out.append(Placed(cls, names, np.diag([*values[6:9], 1.0]), (position[host], frame)))
+    return out
+
+
+# Placed.cls of the rooms of indoor levels (``portals``), which are no ``dat`` records.
+ROOM = -1
+ROOM_MIRRORED = 8  # room flag: a copy flipped under its floor for reflective floors
+
+
+def parse_portals(data: bytes) -> List[Placed]:
+    """Rooms of an indoor level (RS3 ``portals``, ``FUN_7f3a74b0``): hangars, bunkers,
+    corridors. The part starts with ``u16 zones, models, portals, rooms`` and offsets
+    (relative to the part) at +0x14 (portal outline points), +0x18 (zones, 0x38
+    bytes), +0x1C (models, 0x54 bytes: name[0x40]), +0x20 (portals, 0x2C bytes),
+    +0x24 (rooms, 0xA0 bytes). A room is ``{u16 index, u16 model, u16 first portal,
+    u16 portals, u16 flags, u16, f32 model -> level[3][4], f32 level -> model[3][4],
+    ...}`` (``FUN_7f3a5ad4`` boxes it). Rooms with flag 8 are mirror images of another
+    room, flipped under its floor for reflections (``FUN_7f3a74b0``), and left out."""
+    if len(data) < 0x28:
+        return []
+    _zones, models, _portals, rooms = struct.unpack_from(">4H", data, 0)
+    model_table, = struct.unpack_from(">I", data, 0x1C)
+    room_table, = struct.unpack_from(">I", data, 0x24)
+    if model_table + 0x54 * models > len(data) or room_table + 0xA0 * rooms > len(data):
+        return []
+    names = [_name(data, model_table + 0x54 * i, model_table + 0x54 * i + 0x40) or ""
+             for i in range(models)]
+    out = []
+    for i in range(rooms):
+        room = room_table + 0xA0 * i
+        model, = struct.unpack_from(">H", data, room + 2)
+        flags, = struct.unpack_from(">H", data, room + 8)
+        if flags & ROOM_MIRRORED or model >= models:
+            continue
+        m = np.eye(4)
+        m[:3] = np.array(struct.unpack_from(">12f", data, room + 0xC)).reshape(3, 4)
+        out.append(Placed(ROOM, (names[model],), m))
     return out
 
 
