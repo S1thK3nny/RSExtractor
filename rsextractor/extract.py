@@ -706,6 +706,7 @@ class Exporter:
         self.missing: List[str] = []
         self.missing_hashes: set = set()
         self.envmap_folders: set = set()
+        self.object_levels_seen: Dict[Tuple[str, str], Dict[tuple, str]] = {}  # level -> placements -> resource
 
     def model_dir(self, m: ModelParts) -> str:
         parts = [safe_name(p) for p in m.entry.split("/")]
@@ -864,7 +865,15 @@ class Exporter:
     def export_object_level(self, level: ObjectLevel) -> Optional[str]:
         """One FBX with the objects a level resource places (``dat``): every placed model
         copied into place at full detail, copies of the same mesh merged into one mesh,
-        under one empty per model."""
+        under one empty per model. A resource placing exactly what an earlier resource of
+        its level placed (RS2 ``l00/01`` .. ``04`` differ only in lighting) is skipped."""
+        resolved = [(self.g._object_model(obj, level.models), obj.matrix) for obj in level.objects]
+        signature = tuple((name, np.round(m, 3).tobytes()) for name, m in resolved if name is not None)
+        same = self.object_levels_seen.setdefault((level.archive, level.entry.split("/")[0]), {})
+        if signature in same:
+            self.log(f"  objects of {level.archive}/{level.entry} are the same as {same[signature]}, skipped")
+            return None
+        same[signature] = f"{level.archive}/{level.entry}"
         folder = os.path.join(self.out_dir, safe_name(level.archive), *[safe_name(p) for p in level.entry.split("/")])
         os.makedirs(folder, exist_ok=True)
         base = safe_name(f"{level.entry.split('/')[0]}_{level.entry.split('/')[-1]}_objects")
@@ -873,8 +882,7 @@ class Exporter:
         protos: Dict[str, list] = {}
         groups: Dict[str, int] = {}
         placed: Dict[Tuple[str, int], List[np.ndarray]] = {}
-        for obj in level.objects:
-            name = self.g._object_model(obj, level.models)
+        for name, matrix in resolved:
             if name is None:
                 continue
             if name not in protos:
@@ -882,7 +890,7 @@ class Exporter:
                 groups[name] = len(scene.nodes)
                 scene.nodes.append(SceneNode(safe_name(name), parent=0))
             for k in range(len(protos[name])):
-                placed.setdefault((name, k), []).append(obj.matrix)
+                placed.setdefault((name, k), []).append(matrix)
         for (name, k), matrices in placed.items():
             mesh, material = protos[name][k]
             scene.meshes.append(_merge_copies(mesh, matrices, f"{safe_name(name)}_{k:02d}", material, groups[name]))

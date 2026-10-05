@@ -85,7 +85,10 @@ walkers, buildings, crates, troopers, rocks, asteroids ...) in
 detail, copies of the same mesh merged, one empty per model. Characters stand in
 their bind pose. They share the coordinates of the tile level next to them, so
 importing both gives the trench with its turrets and barriers. `--no-object-levels`
-skips them, and `-f /objects` exports only them. Not placed yet: the parts the
+skips them, and `-f /objects` exports only them. Resources that place exactly the
+same objects as an earlier one of their level (Rogue Leader's four Tatooine
+variants `l00/01` .. `04`, which differ only in lighting) are written once, under
+the first. Not placed yet: the parts the
 game mounts on capital ships (the Star Destroyer's sensor balls, command deck
 and guns), sound emitters and effects.
 

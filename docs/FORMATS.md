@@ -160,9 +160,11 @@ cutscene references.
 Capital ship parts are not placed this way: the RS2 Star Destroyer's record
 lists its parts by object index at +0xE0 (`gfxsdballleft`, `gfxsdballright`,
 `gfxsdballbig`, `sdcommdeck`, `sdsmallgun`) and their own records hold no
-usable pose (zero, or far from the hull); the hull model has 61 hardpoint nodes
-(the sensor balls' at (±96, 189, -575)) the game mounts them on. Which part
-goes on which node is still open.
+usable pose (zero, or far from the hull). How the game positions them is still
+open. The hull's `_su` has 61 empty nodes (none carries a mesh; all 417 meshes
+hang on the root), most within a few metres of the hull surface and three 44 m
+behind the engines, but nothing in the data ties a part to one of them, so they
+may as well be effect or target points.
 
 ## Geometry `_ge`
 
