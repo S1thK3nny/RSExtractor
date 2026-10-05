@@ -88,9 +88,11 @@ importing both gives the trench with its turrets and barriers. `--no-object-leve
 skips them, and `-f /objects` exports only them. Resources that place exactly the
 same objects as an earlier one of their level (Rogue Leader's four Tatooine
 variants `l00/01` .. `04`, which differ only in lighting) are written once, under
-the first. Not placed yet: the parts the
-game mounts on capital ships (the Star Destroyer's sensor balls, command deck
-and guns), sound emitters and effects.
+the first. The parts the game mounts on a host (the Star Destroyer's sensor
+balls, command deck and guns, the Bespin balloons' turbolasers, the gas
+platforms' containers) sit on the host's mount points; Rogue Leader's asteroid
+rocks are left out, since the asteroid fields scatter them at random while the
+level runs. Not placed: sound emitters and effects.
 
 Models with levels of detail get one empty per level (`<model>_LOD0`,
 `<model>_LOD1`, ...) holding that level's meshes, which carry the same suffix
@@ -148,7 +150,7 @@ Units are metres (1 game unit = 1 m), Y up.
 | Level models from the shared pool (`bData.pool`) | n/a | yes |
 | Tile levels assembled from their tile maps | n/a | yes |
 | Briefing and HUD wireframes (from the collision hull) | yes | yes |
-| Level objects placed from `dat` (capital ship parts not yet) | yes | yes |
+| Level objects placed from `dat`, capital ship parts on their mount points | yes | yes |
 | Terrain heightmaps (`h16_*.img`) | no | no |
 | Sounds | no | no |
 

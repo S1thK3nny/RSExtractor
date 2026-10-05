@@ -157,14 +157,52 @@ levels (`data/staticGame`, `data/plCraft`); RS2 resolves 6733 of 6950. The rest
 are sound emitters (`aobj_*`), debug arrows and boxes, landing cone effects and
 cutscene references.
 
-Capital ship parts are not placed this way: the RS2 Star Destroyer's record
-lists its parts by object index at +0xE0 (`gfxsdballleft`, `gfxsdballright`,
-`gfxsdballbig`, `sdcommdeck`, `sdsmallgun`) and their own records hold no
-usable pose (zero, or far from the hull). How the game positions them is still
-open. The hull's `_su` has 61 empty nodes (none carries a mesh; all 417 meshes
-hang on the root), most within a few metres of the hull surface and three 44 m
-behind the engines, but nothing in the data ties a part to one of them, so they
-may as well be effect or target points.
+Capital ship parts are not placed by their pose. Their records sit at the
+origin; the host's spawn code puts each one on a mount point of the host model
+and keeps only the part's model and scale (position and angles come from the
+mount's matrix, so its scale drops out). A part is named by a record handle in
+the host's class data, resolved through the index of all records (RS2 `+0x50`
+count, `+0x54` offset; RS3 `+0x6C`, `+0x70`; handle `k` is entry `k - 1`, RS3
+handles with bit 15 are records made at run time; only records with `+0x02` = 0
+count), or is the first record of a class in that index. A part record used as
+a template (the guns) is spawned once per mount.
+
+RS2 mounts are `_su` output matrices: game index `k` is node `k - 1` (0 is the
+model root, the same numbering as the command stream's parents).
+
+| class | host | part → game nodes |
+|-------|------|-------------------|
+| 40 | Star Destroyer (`FUN_7fd96a14`) | `+0xE0..+0xEC` sensor balls left, right, big, command deck → 0x10..0x13; first class 44 (ion cannon) → 8, F, D, E, C, 9, B, A; `+0xF0` small gun → 0x14..0x3C |
+| 41 | crashed Star Destroyer (`FUN_7fd971dc`) | first class 45 → 5, 6, 7, 8, 4, 1, 3, 2; `+0xA8` → 9, A, B, 17, C, D, 16, 1B, 19, 18, 1A, 15, 14, 13, 12 |
+| 58 | Bespin balloon (`FUN_7fd97d00`) | `+0x84` → 1; `+0x88` → 2, 4, 6 (3, 5, 7 added when the player is close, `FUN_7fd0e47c`) |
+| 60 | gas platform (`FUN_7fd98064`, tables in the boot DOL at `0x8005D754`) | `+0x50` → 0x33..0x3A; `+0x54` → 0x13..0x32 |
+
+RS3 mounts are named locators: the host keeps a list of names at object `+0x124`
+and a slot number picks one (`FUN_7f227c4c` looks the slot up in the model,
+then the locator's matrix). The locators are in `_su`: word 30 points to a u16
+per locator (its matrix slot), word 31 to 3x4 matrices in the space of the
+parent output matrix the `_nm` `locatormatrix` entry names (0 = model).
+
+| class | host | part → locators |
+|-------|------|-----------------|
+| 52 | Star Destroyer (`FUN_7f2cb768`, names `0x7F7073F0`) | `+0xF4` `loc_ball_l`, `+0xF8` `loc_ball_r`, `+0xFC` `loc_bball`, `+0x100` `loc_cdeck`; first class 0x38 → `loc_iongun_0005, 8, 6, 7, 2, 3, 1, 4`; `+0x104` → `loc_sgun_0001..0042` |
+| 53 | crashed Star Destroyer (`FUN_7f2cc20c`, `0x7F7053F8`) | first class 0x39 → `loc_ai_iongunright01..04`, `left01..04`; `+0xB4` → 14 `loc_ai_smallgun_*` |
+| 70 | Bespin balloon (`FUN_7f263594`, `0x7F66985C`) | `+0x8C` `loc_balloonengines`; `+0x90` → `loc_turbolaser001..006` (4..6 when close) |
+| 72 | gas platform (`FUN_7f263ad8`, `0x7F6698A8`) | `+0x50` → `loc_gascontainersmall001..008`; `+0x54` → `loc_gascontainer001..032` (with `+0x58` set the game keeps 7 of them at random) |
+| 263 | Republic gunship (`FUN_7f2bc43c`, `0x7F6F8200`) | `+0x234` → `loc_ballturret_left_01, 02`; `+0x238` → `right_01, 02`; `+0x23C` `loc_turretgun_left`; `+0x240` `loc_turretgun_right` |
+| 328 | Fondor station (`FUN_7f2ed164`, `0x7F72D324`) | `+0x50` → `loc_ai_smallgun_0001..00019` |
+
+RS2 asteroid rocks (class 140) have no spawn handler: the asteroid fields
+(classes 143, 144) pick from them and scatter the rocks at random
+(`FUN_7fc9a8ec`, `FUN_7fc9adf4`), so they have no place to export.
+
+Which records the level spawns by itself (RS2 `FUN_7fc1e988`, `FUN_7fc1ec8c`):
+all but those with flag bit 2, once their spawn condition holds
+(`FUN_7fc21410`: for most classes a block at `+0x58`, `{u32 kind, event
+handle, counter handle, u32 count}`; kind 0 waits for the event and the
+counter, any other kind is left to scripts). AI craft and wingmen at the origin
+(`tieai`, `xwing_wm`) are spawned this way too; where they start is not worked
+out yet.
 
 ## Geometry `_ge`
 

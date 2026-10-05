@@ -236,7 +236,34 @@ def name_tables(nm: bytes) -> Dict[str, List[Tuple[int, int, str]]]:
     return tables
 
 
-Influence = Tuple[int, Optional[int], float]  # (node output index or -1 for the root, inverse bind, weight)
+def locators(su: bytes, nm: bytes, game: int) -> Dict[str, np.ndarray]:
+    """RS3 locators by lower case name, as model space matrices. ``_su`` word 30
+    points to a u16 per locator (its matrix) and word 31 to the 3x4 matrices,
+    relative to the parent output matrix the ``_nm`` entry names (0 = model)."""
+    if game != 3 or len(su) < 0x80:
+        return {}
+    slots, mats = struct.unpack_from(">II", su, 30 * 4)
+    worlds = None
+    out: Dict[str, np.ndarray] = {}
+    for key, parent, name in name_tables(nm).get("locatormatrix", []):
+        i = key & 0x7FFF
+        if not slots or slots + 2 * i + 2 > mats:
+            continue
+        slot = struct.unpack_from(">H", su, slots + 2 * i)[0]
+        if not mats or mats + 48 * (slot + 1) > len(su):
+            continue
+        m = np.eye(4)
+        m[:3, :] = np.array(struct.unpack_from(">12f", su, mats + 48 * slot)).reshape(3, 4)
+        if parent:
+            worlds = evaluate_nodes(su, game) if worlds is None else worlds
+            if parent > len(worlds):
+                continue
+            m = worlds[parent - 1] @ m
+        out[name.lower()] = m
+    return out
+
+
+Influence =Tuple[int, Optional[int], float]  # (node output index or -1 for the root, inverse bind, weight)
 
 
 def inverse_bind(ge: bytes, index: int) -> Optional[np.ndarray]:

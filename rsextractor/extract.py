@@ -23,7 +23,7 @@ from .model import Mesh, parse_geometry
 from .placement import Placed, parse_dat
 from .rig import Rig, add_animations
 from .scene import Scene, SceneMaterial, SceneMesh, SceneNode
-from .skeleton import place_static_meshes
+from .skeleton import evaluate_nodes, locators, place_static_meshes
 from .texture import TextureLibrary
 from .tiles import parse_bmap, parse_lm, parse_tmap, tile_cells
 
@@ -868,6 +868,26 @@ class Exporter:
         under one empty per model. A resource placing exactly what an earlier resource of
         its level placed (RS2 ``l00/01`` .. ``04`` differ only in lighting) is skipped."""
         resolved = [(self.g._object_model(obj, level.models), obj.matrix) for obj in level.objects]
+        frames: Dict[str, Tuple[List[np.ndarray], Dict[str, np.ndarray]]] = {}
+        for i, obj in enumerate(level.objects):
+            if obj.mount is None:
+                continue
+            host, key = obj.mount
+            host_name, host_matrix = resolved[host]
+            parts = level.models.get(host_name, {}) if host_name else {}
+            if host_name not in frames and "su" in parts:
+                frames[host_name] = (evaluate_nodes(parts["su"], self.g.game),
+                                     locators(parts["su"], parts.get("nm", b""), self.g.game))
+            nodes, named = frames.get(host_name, ([], {}))
+            local = named.get(key) if isinstance(key, str) else nodes[key] if 0 <= key < len(nodes) else None
+            if local is None:
+                resolved[i] = (None, obj.matrix)
+                continue
+            # The game turns the frame into a pose (position and angles) and gives it
+            # the part's own scale.
+            frame = host_matrix @ local
+            frame[:3, :3] /= np.linalg.norm(frame[:3, :3], axis=0)
+            resolved[i] = (resolved[i][0], frame @ obj.matrix)
         signature = tuple((name, np.round(m, 3).tobytes()) for name, m in resolved if name is not None)
         same = self.object_levels_seen.setdefault((level.archive, level.entry.split("/")[0]), {})
         if signature in same:

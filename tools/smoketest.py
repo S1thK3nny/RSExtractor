@@ -30,7 +30,7 @@ SAMPLES = {
         "l02/00/XWing_wm": "reflective canopy, level environment cube",
         "frontend/goldMedal": "reflective, front end environment cube",
         "gfxWIREOverlaysXWing": "briefing wireframe from the collision hull",
-        "l05/01/objects": "level objects (dat, RS2 header), Star Destroyer hull placed",
+        "l05/01/objects": "level objects (dat, RS2 header), Star Destroyer parts on hull nodes",
     },
     3: {
         "plCraft/xwing_base": "craft + cockpit: emboss from color alpha, self lit, animation, wireframe (compact hull records)",
@@ -47,6 +47,7 @@ SAMPLES = {
         "coop_08_Bespin_lvl/02/tiles": "tile level layout (tmap, bmap, building matrices)",
         "frontend_lvl/05c00/LS_PLY_Farmboy": "cutscene actor clip (luke_dance from the credits cast)",
         "RAC_F_DeathStarTrench_lvl/01/objects": "level objects (dat): wall turrets need X before Z, flt models",
+        "B_02_Hoth_lvl/03/objects": "Star Destroyer parts on named hull locators",
         "RAC_F_DeathStarTrench_lvl/01/tiles": "tile layout half a cell in from the grid corner (matches the objects)",
     },
 }
