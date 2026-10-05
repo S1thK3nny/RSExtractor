@@ -142,6 +142,7 @@ def cmd_extract(args) -> int:
             f"{s['specular_maps']} specular maps",
             f"{s['environment_maps']} environment maps",
             f"{s['tile_levels']} tile levels",
+            f"{s['wireframes']} wireframes",
             f"{images} images",
             f"{s['skipped']} empty models skipped",
             f"{s['missing_textures']} textures not found",

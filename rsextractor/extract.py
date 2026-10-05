@@ -13,6 +13,7 @@ from PIL import Image
 
 from .archive import Archive, DataPool, Entry, decompress, parse_package, FOLDER
 from .bump import TILT, channel, emissive, gray, height_to_normal, opaque, specular, tilt_to_normal
+from .collision import parse_collision
 from .disc import Disc
 from .envmap import FACES, panorama
 from .fbx import write_fbx
@@ -98,6 +99,8 @@ class TileLevel:
 
 
 TILE_MODEL = re.compile(r"[tb]\d{3}_0$")
+# Briefing and HUD wireframes (RS2 gfxWIREOverlays*, RS3 wireOverlay*): drawn from the collision hull.
+WIRE_OVERLAY = re.compile(r"wireoverlay", re.I)
 
 
 def envmap_faces(files: Dict[str, bytes]) -> Dict[str, bytes]:
@@ -539,7 +542,7 @@ class Exporter:
         self.written_textures: Dict[str, str] = {}
         self.stats = {"models": 0, "skipped": 0, "textures": 0, "normal_maps": 0, "emissive_maps": 0,
                       "specular_maps": 0, "environment_maps": 0, "tile_levels": 0, "missing_textures": 0,
-                      "skeletons": 0, "animations": 0}
+                      "skeletons": 0, "animations": 0, "wireframes": 0}
         self.missing: List[str] = []
         self.missing_hashes: set = set()
         self.envmap_folders: set = set()
@@ -626,10 +629,34 @@ class Exporter:
                 skin_bones=bones,
                 skin_weights=weights,
             ))
+        if "cl" in m.parts and WIRE_OVERLAY.search(m.name):
+            self.stats["wireframes"] += self._add_wireframe(scene, m.parts["cl"], base, -1 if rig is not None else 0)
         path = os.path.join(folder, base + ".fbx")
         write_fbx(scene, path, embed_textures=self.embed)
         self.stats["models"] += 1
         return path
+
+    @staticmethod
+    def _add_wireframe(scene: Scene, cl: bytes, base: str, parent: int) -> bool:
+        """The collision hull as its own mesh with the game's polygons (n-gons, so a
+        wireframe view shows only the game's edges) and flat plane normals."""
+        hull = parse_collision(cl)
+        if not hull.polygons:
+            return False
+        sizes = [len(poly) for poly in hull.polygons]
+        corners = np.array([v for poly in hull.polygons for v in poly])
+        starts = np.cumsum([0] + sizes[:-1])
+        scene.materials.append(SceneMaterial("wireframe"))
+        scene.meshes.append(SceneMesh(
+            name=f"{base}_wire",
+            positions=hull.positions[corners],
+            triangles=np.zeros((0, 3), dtype=np.int32),
+            normals=np.repeat(hull.normals, sizes, axis=0),
+            material=len(scene.materials) - 1,
+            node=parent,
+            polygons=[range(s, s + n) for s, n in zip(starts, sizes)],
+        ))
+        return True
 
     def export_tile_level(self, level: TileLevel) -> Optional[str]:
         """One FBX with the whole tile layout: every tile and building copied into

@@ -106,6 +106,14 @@ The panorama is laid out for Blender: use it in an Environment Texture node of
 the world and the imported models reflect it the way they do in the game. Models
 outside levels (`data/plCraft`) have no cube of their own; any level's will do.
 
+Briefing and HUD wireframes (Rogue Leader `data/briefing/gfxWIREOverlays*`,
+Rebel Strike `wireOverlay*` next to each craft, character and weapon) are drawn by
+the game from the model's collision hull; their visible geometry is just a flat
+quad. The FBX carries that hull as an extra mesh `<model>_wire` with the game's
+own polygons (not triangulated), so showing only its edges gives the game's
+lines: in Blender add a Wireframe modifier (or set the object to display as
+wire) and give the `wireframe` material an emission color.
+
 Units are metres (1 game unit = 1 m), Y up.
 
 ## Status
@@ -123,6 +131,7 @@ Units are metres (1 game unit = 1 m), Y up.
 | Animations (`_an`), including IK driven walkers | yes | yes |
 | Level models from the shared pool (`bData.pool`) | n/a | yes |
 | Tile levels assembled from their tile maps | n/a | yes |
+| Briefing and HUD wireframes (from the collision hull) | yes | yes |
 | Terrain heightmaps (`h16_*.img`), other level object placement | no | no |
 | Sounds | no | no |
 

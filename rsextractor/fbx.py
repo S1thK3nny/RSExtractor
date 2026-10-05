@@ -334,12 +334,17 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
     # --- meshes
     pose_entries: List[Tuple[int, np.ndarray]] = []
     for mesh in scene.meshes:
-        if len(mesh.triangles) == 0:
+        if mesh.polygons is not None:
+            tri = np.array([v for poly in mesh.polygons for v in poly], dtype=np.int64)
+            ends = np.cumsum([len(poly) for poly in mesh.polygons]) - 1
+        else:
+            tri = mesh.triangles.reshape(-1)
+            ends = np.arange(2, len(tri), 3)
+        if len(tri) == 0:
             continue
         points, remap, source = _weld(mesh)
-        tri = mesh.triangles
         poly_index = remap[tri].astype(np.int64)
-        poly_index[:, 2] = -poly_index[:, 2] - 1
+        poly_index[ends] = -poly_index[ends] - 1
 
         gid = ids()
         geo = objects.add("Geometry", L(gid), S(_name(mesh.name, "Geometry")), S("Mesh"))

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 
@@ -48,6 +48,7 @@ class SceneMesh:
     # skinning: up to K influences per vertex (node index, -1 = unused) and their weights
     skin_bones: Optional[np.ndarray] = None    # (N, K) int
     skin_weights: Optional[np.ndarray] = None  # (N, K) float
+    polygons: Optional[List[Sequence[int]]] = None  # n-gons written instead of triangles
 
 
 @dataclass

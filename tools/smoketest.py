@@ -29,9 +29,10 @@ SAMPLES = {
         "l00/01/sky00": "RGBA8 sky",
         "l02/00/XWing_wm": "reflective canopy, level environment cube",
         "frontend/goldMedal": "reflective, front end environment cube",
+        "gfxWIREOverlaysXWing": "briefing wireframe from the collision hull",
     },
     3: {
-        "plCraft/xwing_base": "craft + cockpit: emboss from color alpha, self lit, animation",
+        "plCraft/xwing_base": "craft + cockpit: emboss from color alpha, self lit, animation, wireframe (compact hull records)",
         "plCraft/hanEmpire_base": "CMPR tilt bump, character skeleton and clips",
         "plCraft/tie_base": "opacity map",
         "plCraft/atst_base": "walker IK solver",

@@ -73,8 +73,14 @@ the US disc):
   counts them; the scale of `_1_lm` copies is ignored, only `t###_0_lm` is
   read, `FUN_7f35c388`). See "Tile maps".
 
+Player craft live in `data/plCraft/<craft>_<variant>`: `_base` is the flown
+craft (craft, cockpit, secondary weapon, symbol, RS3 wire overlay), `_ha` the
+hangar model, `_wm` the AI wingman's copy (`wm_<craft>` next to `plCraft/<craft>_wm`
+in both executables; no cockpit, lighter textures, e.g. the astromech at half
+the player's resolution).
+
 A model named `X` consists of `X_su` (setup), `X_ge` (geometry), `X_si`
-(materials), optional `X_an` (animation), `X_cl` (collision) and, in RS3, `X_nm`
+(materials), optional `X_an` (animation), `X_cl` (collision, see below) and, in RS3, `X_nm`
 (names). Texture pools are `*_tpi` + `*_tpd`.
 
 ## Tile maps
@@ -160,6 +166,38 @@ VAT word (RS2 `FUN_7fd28640`, RS3 `FUN_7f398ef0`), one per vertex format index
 Display lists are standard GX (`0x98` strips, `0x90` triangles, `0xA0` fans, `0x80` quads).
 GX front faces are wound clockwise, so the exporter reverses every triangle for FBX
 (counter clockwise); the stored normals already point out of the front faces.
+
+## Collision `_cl`
+
+Relocatable image like `_ge` (offsets from the part start). Decoded only for the
+wire overlays so far (`rsextractor/collision.py`), not checked on level geometry.
+
+```
++0x00 u32 -> vertices       f32[3] each, up to the normals
++0x04 u32 -> plane normals  f32[3] each, up to the end of the part
++0x1C u32 list count (RS2 4, RS3 8; only the first list is filled in the overlays)
++0x20 u32 -> list[count]
+list    u32 n, n x { u32, u32 -> hull }
+hull    f32 bbox_min[3], f32 bbox_max[3], octree root node
+node    u32 -> child[8] (0 = none), u32, u32, u32 record count, records
+record  u8 flags, u8 n, u16 plane, u16 0xFFFF, u16 0, then
+        flags bit 0 set: n x { u16 vertex, u16 edge plane }
+        clear (RS3):     n x u16 vertex
+```
+
+Records are 2-byte aligned (RS3 nodes can start at odd halfwords). Polygons are
+3 to 16 sided and run clockwise around their plane normal (GX front faces), so
+the exporter reverses them. A polygon that straddles octree cells is listed in
+every cell it touches; thin sheets are stored once per side with opposite normals.
+The edge plane index is the normal of the plane through an edge (shared by
+coplanar neighbours); RS3 drops it for most records.
+
+Wire overlays (RS2 `data/briefing/gfxWIREOverlays*`, RS3 `wireOverlay*` in
+`plCraft/*_base`, `frontend_lvl`, `staticGame/<lang>` and the co-op powerups) are
+drawn from this hull: their `_ge` is one untextured quad spanning the hull's
+footprint. The drawing code is not traced yet; likely candidates by name are RS2
+`opkgWireFrame_Create` and RS3 `OBJfrontendWireframeModel`. The exporter adds the hull as `<model>_wire`, keeping its n-gons so the wireframe
+shows only the game's edges.
 
 ## Materials `_si` ("ABME")
 
