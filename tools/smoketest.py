@@ -44,6 +44,7 @@ SAMPLES = {
         "B_02_Hoth_lvl/01/grndHothMedicalCenter": "I4 opacity and bump textures",
         "hangarCalamari_lvl/00/Awing_hangar": "reflective, masked highlight, level environment cube",
         "coop_08_Bespin_lvl/02/tiles": "tile level layout (tmap, bmap, building matrices)",
+        "frontend_lvl/05c00/LS_PLY_Farmboy": "cutscene actor clip (luke_dance from the credits cast)",
     },
 }
 

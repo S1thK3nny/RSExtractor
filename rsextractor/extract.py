@@ -103,6 +103,38 @@ TILE_MODEL = re.compile(r"[tb]\d{3}_0$")
 WIRE_OVERLAY = re.compile(r"wireoverlay", re.I)
 
 
+def cutscene_cast(cs: bytes) -> List[Tuple[str, str, str]]:
+    """``X_cs``: the actors of a cutscene as (locator, model, clip); clip is "" for actors
+    that only stand at their locator."""
+    strings, count = struct.unpack_from(">I", cs, 0)[0], struct.unpack_from(">I", cs, 12)[0]
+
+    def name(offset: int) -> str:
+        start = strings + offset
+        if offset == 0xFFFFFFFF or start >= len(cs):
+            return ""
+        return cs[start:cs.index(b"\0", start)].decode("latin-1")
+
+    cast = []
+    for i in range(count):
+        actor = struct.unpack_from(">I", cs, 16 + 4 * i)[0]
+        locator, _variant, _, model, clip = struct.unpack_from(">5I", cs, actor)
+        cast.append((name(locator), name(model), name(clip)))
+    return cast
+
+
+def actor_clip_names(files: Dict[str, bytes]) -> set:
+    """Clips a package's cutscene casts play on their actors (lower case)."""
+    return {clip.lower() for path, cs in files.items() if path.endswith("_cs")
+            for _, _, clip in cutscene_cast(cs) if clip}
+
+
+def clip_channels(clip: bytes) -> Optional[int]:
+    if len(clip) < 4:
+        return None
+    obj = struct.unpack_from(">I", clip, 0)[0]
+    return struct.unpack_from(">I", clip, obj + 20)[0] if obj + 24 <= len(clip) else None
+
+
 def envmap_faces(files: Dict[str, bytes]) -> Dict[str, bytes]:
     """The environment cube of a package (``extra/envMap/<face>``, RS2 front end and
     briefing ``envMap/<face>``), or nothing when a face is missing."""
@@ -124,6 +156,8 @@ class GameData:
         self.data_pool = DataPool(disc) if disc.exists("bData.pool") else None
         self._pool_refs: Optional[Dict[bytes, List[str]]] = None
         self._shared_clips: Optional[Dict[Tuple[str, int], List[Tuple[str, bytes]]]] = None
+        # model name (lower case) -> [(levels or None for any, channels, clip name, clip)]
+        self._actor_clips: Dict[str, List[Tuple[Optional[set], int, str, bytes]]] = {}
         self._cache: "OrderedDict[Tuple[str, str], bytes]" = OrderedDict()
         self.position = (0, 0)  # (entries done, entries) while iter_models runs
 
@@ -219,9 +253,12 @@ class GameData:
     def _package_clips(self, files: Dict[str, bytes]) -> Dict[str, List[Tuple[str, bytes]]]:
         """Standalone animation clips of a package, by folder."""
         clips: Dict[str, List[Tuple[str, bytes]]] = {}
+        actors = actor_clip_names(files)
         for path, data in files.items():
             if path.endswith("_an") and path[:-3] + "_ge" not in files:
                 folder, _, name = path[:-3].rpartition("/")
+                if name.lower() in actors:  # played by a cutscene actor, not the cutscene's rig
+                    continue
                 clips.setdefault(folder, []).append((name, data))
         return clips
 
@@ -265,23 +302,62 @@ class GameData:
         """Clip sets of ``bData.pool`` (packages without geometry, such as ``ss2HgunAnims``)
         by (level, channel count). A level loads them for all its characters with that rig."""
         if self._shared_clips is None:
-            shared: Dict[Tuple[str, int], Dict[str, bytes]] = {}
-            refs = self.pool_refs()
-            for key in self.data_pool or ():
-                files = self._read_pool_package(key)
-                if not files or any(path.endswith("_ge") for path in files):
-                    continue
-                for path, clip in files.items():
-                    if not path.endswith("_an") or len(clip) < 4:
-                        continue
-                    obj = struct.unpack_from(">I", clip, 0)[0]
-                    if obj + 24 > len(clip):
-                        continue
-                    channels = struct.unpack_from(">I", clip, obj + 20)[0]
-                    for ref in refs.get(key, ()):
-                        shared.setdefault((level_of(ref), channels), {})[path[:-3].rsplit("/", 1)[-1]] = clip
-            self._shared_clips = {k: sorted(v.items()) for k, v in shared.items()}
+            self._scan_pool()
         return self._shared_clips
+
+    def actor_clips(self, name: str, channels: int, levels: set) -> List[Tuple[str, bytes]]:
+        """Cutscene clips the casts (``_cs``) play on model ``name`` in one of ``levels``."""
+        if self._shared_clips is None:
+            self._scan_pool()
+        return [(clip_name, clip) for where, ch, clip_name, clip in self._actor_clips.get(name.lower(), ())
+                if ch == channels and (where is None or where & levels)]
+
+    def _scan_pool(self) -> None:
+        shared: Dict[Tuple[str, int], Dict[str, bytes]] = {}
+        refs = self.pool_refs()
+        model_levels: Dict[str, set] = {}  # pool model name (lower case) -> levels
+        casts = []  # (levels, cast, the actors' clips by lower case name)
+        for key in self.data_pool or ():
+            files = self._read_pool_package(key)
+            levels = {level_of(ref) for ref in refs.get(key, ())}
+            for path in files:
+                if path.endswith("_ge"):
+                    model_levels.setdefault(path[:-3].rsplit("/", 1)[-1].lower(), set()).update(levels)
+                elif path.endswith("_cs"):
+                    cast = cutscene_cast(files[path])
+                    wanted = {clip.lower() for _, _, clip in cast if clip}
+                    clips = {name.lower(): (name, data) for name, data in
+                             ((p[:-3].rsplit("/", 1)[-1], d) for p, d in files.items() if p.endswith("_an"))
+                             if name.lower() in wanted}
+                    casts.append((levels, cast, clips))
+            if not files or any(path.endswith("_ge") for path in files):
+                continue
+            for path, clip in files.items():
+                channels = clip_channels(clip) if path.endswith("_an") else None
+                if channels is None:
+                    continue
+                for ref in refs.get(key, ()):
+                    shared.setdefault((level_of(ref), channels), {})[path[:-3].rsplit("/", 1)[-1]] = clip
+        self._shared_clips = {k: sorted(v.items()) for k, v in shared.items()}
+        # An actor plays its clip on the model of that name in the cutscene's level, or,
+        # when the level has none in the pool (player characters), on every model of that name.
+        actors: Dict[str, Dict[str, Tuple[Optional[set], int, bytes]]] = {}
+        for levels, cast, clips in casts:
+            for _locator, model, clip in cast:
+                if not clip or clip.lower() not in clips:
+                    continue
+                clip_name, data = clips[clip.lower()]
+                channels = clip_channels(data)
+                where = levels if model_levels.get(model.lower(), set()) & levels else None
+                known = actors.setdefault(model.lower(), {})
+                if clip_name in known and known[clip_name][2] != data:
+                    clip_name = f"{clip_name}_{sorted(levels)[0].rsplit('/', 1)[-1] if levels else 'pool'}"
+                if clip_name in known:
+                    old = known[clip_name][0]
+                    where = None if old is None or where is None else old | where
+                known[clip_name] = (where, channels, data)
+        self._actor_clips = {model: [(where, ch, name, data) for name, (where, ch, data) in sorted(clips.items())]
+                             for model, clips in actors.items()}
 
     def iter_models(self, filt: Optional[Callable[[str], bool]] = None) -> Iterator[ModelParts]:
         """Every model on the disc. A ``bData.pool`` package is listed once, with the
@@ -388,6 +464,11 @@ class GameData:
                         if clip_name not in seen:
                             seen.add(clip_name)
                             model_clips.append((clip_name, clip))
+                levels = {level_of(lb) for lb in labels}
+                for clip_name, clip in self.actor_clips(stem.rsplit("/", 1)[-1], channels, levels):
+                    if clip_name not in seen:
+                        seen.add(clip_name)
+                        model_clips.append((clip_name, clip))
             yield ModelParts(name, archive_label, entry.name, parts, model_clips)
 
 

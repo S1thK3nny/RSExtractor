@@ -65,7 +65,10 @@ next to the first level resource that uses it (the AT-AT lands in
 `lvlPack02/L_06_Hoth_lvl/01/grndATAT_ai.fbx`); `-f` with the name of any level
 that uses a model selects it too. The few pool models no level references go to
 `bData/<model>/`. Characters also get the shared clip sets their levels load
-(run, crouch, death ... for stormtroopers, officers, Ewoks, Jawas).
+(run, crouch, death ... for stormtroopers, officers, Ewoks, Jawas). The clips
+cutscenes play on their cast (Luke's dance in the credits, the stormtroopers of
+the Yavin cutscenes ...) go to that model too, to its copy in the cutscene's
+level when the level has one; the cutscene model keeps only its own rig's clip.
 
 Rebel Strike builds several levels from square tiles with buildings on them
 (both Death Star surfaces, the trench run, the Executor hull, Fondor, the

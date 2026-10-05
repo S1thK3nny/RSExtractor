@@ -62,9 +62,12 @@ the US disc):
   f32, u32 matrix, u32, u32}` whose names are offsets into the string table at
   `strings`: the locator of the cutscene's own rig (`characterlukeik`), the
   model to place there (`LS_PLY_Farmboy`, any model of the level or pool) and
-  the clip it plays (`luke_dance`), which the cutscene package carries. 115 of
-  the 370 clips in cutscene packages belong to such actors, not to the
-  cutscene's own rig.
+  the clip it plays (`luke_dance`; none when the actor only stands at its
+  locator), which the cutscene package carries. 98 clips in cutscene packages
+  (167 actors) belong to such actors, not to the cutscene's own rig; each has
+  the curve count of its model's `_su`. The model is a pool model of the
+  cutscene's level or a player character (`data/plCraft`); only
+  `gfxRebelAssault` (Kothlis) exists nowhere on the disc.
 * `X_aw` (16, player and wingman characters, Yoda): `u32 joints, u32
   transforms, f32 weight[joints], f32 weight[transforms]`, values 0, 0.2, 0.4
   and 1 per node, likely the weights of an aiming or upper body layer.
