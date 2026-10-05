@@ -110,6 +110,19 @@ class ObjectLevel:
 
 
 TILE_MODEL = re.compile(r"[tb]\d{3}_0$")
+# RS2 names its full detail tiles and buildings ``_tile05/0005_0``, ``_bldg05/0005_0``.
+RS2_TILE_MODEL = re.compile(r"(?:^|/)_(tile|bldg)\d+/(\d+)_0$")
+
+
+def tile_model_name(stem: str) -> Optional[str]:
+    """``t###_0`` / ``b###_0`` for the full detail model of a tile or building type."""
+    name = stem.rsplit("/", 1)[-1]
+    if TILE_MODEL.match(name):
+        return name
+    m = RS2_TILE_MODEL.search(stem)
+    return f"{m.group(1)[0]}{int(m.group(2)):03d}_0" if m else None
+
+
 # Briefing and HUD wireframes (RS2 gfxWIREOverlays*, RS3 wireOverlay*): drawn from the collision hull.
 WIRE_OVERLAY = re.compile(r"wireoverlay", re.I)
 
@@ -424,8 +437,8 @@ class GameData:
             for source in sources:
                 for path in source:
                     stem = path[:-3]
-                    name = stem.rsplit("/", 1)[-1]
-                    if path.endswith("_ge") and TILE_MODEL.match(name) and name not in level.models:
+                    name = tile_model_name(stem) if path.endswith("_ge") else None
+                    if name and name not in level.models:
                         level.models[name] = {sfx: source[f"{stem}_{sfx}"] for sfx in ("su", "ge", "si", "nm", "lm")
                                               if f"{stem}_{sfx}" in source}
             yield level
@@ -707,6 +720,7 @@ class Exporter:
         self.missing_hashes: set = set()
         self.envmap_folders: set = set()
         self.object_levels_seen: Dict[Tuple[str, str], Dict[tuple, str]] = {}  # level -> placements -> resource
+        self.tile_levels_seen: Dict[Tuple[str, str], Dict[tuple, str]] = {}  # level -> layout -> resource
 
     def model_dir(self, m: ModelParts) -> str:
         parts = [safe_name(p) for p in m.entry.split("/")]
@@ -822,11 +836,19 @@ class Exporter:
     def export_tile_level(self, level: TileLevel) -> Optional[str]:
         """One FBX with the whole tile layout: every tile and building copied into
         place (full detail only). Copies of the same mesh are merged into one mesh per
-        tile or building type, so the scene has a few hundred objects, not one per cell."""
+        tile or building type, so the scene has a few hundred objects, not one per cell.
+        A resource with the same layout and models as an earlier resource of its level
+        (RS2 ``l07/02``, ``l10/03``) is skipped."""
         grids = parse_tmap(level.tmap)
         buildings = parse_bmap(level.bmap)
         if not grids:
             return None
+        signature = (level.tmap, level.bmap, tuple(sorted((name, parts.get("ge", b"")) for name, parts in level.models.items())))
+        same = self.tile_levels_seen.setdefault((level.archive, level.entry.split("/")[0]), {})
+        if signature in same:
+            self.log(f"  tiles of {level.archive}/{level.entry} are the same as {same[signature]}, skipped")
+            return None
+        same[signature] = f"{level.archive}/{level.entry}"
         folder = os.path.join(self.out_dir, safe_name(level.archive), *[safe_name(p) for p in level.entry.split("/")])
         os.makedirs(folder, exist_ok=True)
         base = safe_name(f"{level.entry.split('/')[0]}_{level.entry.split('/')[-1]}_tiles")

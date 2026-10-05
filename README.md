@@ -70,14 +70,17 @@ cutscenes play on their cast (Luke's dance in the credits, the stormtroopers of
 the Yavin cutscenes ...) go to that model too, to its copy in the cutscene's
 level when the level has one; the cutscene model keeps only its own rig's clip.
 
-Rebel Strike builds several levels from square tiles with buildings on them
-(both Death Star surfaces, the trench run, the Executor hull, Fondor, the
-Academy, Ralltiir, Bespin's cloud city). Each such level resource also gets the
+Both games build several levels from square tiles with buildings on them
+(Rebel Strike: both Death Star surfaces, the trench run, the Executor hull,
+Fondor, the Academy, Ralltiir, Bespin's cloud city; Rogue Leader: the Death
+Star surfaces of both Death Stars, the Imperial Academy, Cloud City). Each such
+level resource also gets the
 assembled layout, `<level>_<resource>_tiles.fbx`, with every tile and building
 copied into place at full detail; copies of the same mesh are merged per tile
 or building type, so Blender imports a few hundred objects. They are big (up to
 ~170 MB for the largest Death Star map); `--no-tile-levels` skips them, and
-`-f /tiles` exports only them.
+`-f /tiles` exports only them. A resource with the same layout as an earlier one
+of its level (Rogue Leader `l07/02`, `l10/03`) is written once, under the first.
 
 Every level resource of both games also gets the objects it places (turrets,
 walkers, buildings, crates, troopers, rocks, asteroids ...) in
@@ -148,7 +151,7 @@ Units are metres (1 game unit = 1 m), Y up.
 | Skeletons / skin weights in the FBX | yes | yes (capes lie flat as stored; the game simulates cloth) |
 | Animations (`_an`), including IK driven walkers | yes | yes |
 | Level models from the shared pool (`bData.pool`) | n/a | yes |
-| Tile levels assembled from their tile maps | n/a | yes |
+| Tile levels assembled from their tile maps | yes | yes |
 | Briefing and HUD wireframes (from the collision hull) | yes | yes |
 | Level objects placed from `dat`, capital ship parts on their mount points | yes | yes |
 | Terrain heightmaps (`h16_*.img`) | no | no |

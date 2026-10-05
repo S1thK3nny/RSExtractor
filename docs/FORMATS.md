@@ -88,11 +88,15 @@ A model named `X` consists of `X_su` (setup), `X_ge` (geometry), `X_si`
 
 ## Tile maps
 
-Several RS3 levels are built from square tiles on a grid (Death Star surface
-and trench, Executor hull, Fondor, the Academy, Ralltiir, Bespin's city; RS3
-`FUN_7f35cfb0` sets it up). The level package holds `tmap` and `bmap` and
-references packages `tile##` and `bldg##` in `bData.pool` with tile models
-`t###_v` and building models `b###_v` (`v` = level of detail, 0 = full).
+Levels of both games are built from square tiles on a grid (RS3: Death Star
+surface and trench, Executor hull, Fondor, the Academy, Ralltiir, Bespin's
+city; RS2: the Death Star surfaces of `l01`, `l10`, `l15`, `l16`, `l22`, the
+Imperial Academy `l07`, Cloud City `l08`; RS3 `FUN_7f35cfb0` sets it up). The
+level package holds `tmap` and `bmap`. RS3 references packages `tile##` and
+`bldg##` in `bData.pool` with tile models `t###_v` and building models `b###_v`
+(`v` = level of detail, 0 = full); RS2 keeps them in the level packages as
+`_tile##/####_v` and `_bldg##/####_v`, in the same resource or in `X/00` of the
+level. Both games use the same `tmap` and `bmap` layout.
 
 `tmap`: `u16, u16 grids, u16, u16 tile types`, then grids of 0x154 bytes:
 

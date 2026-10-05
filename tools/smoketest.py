@@ -30,6 +30,7 @@ SAMPLES = {
         "l02/00/XWing_wm": "reflective canopy, level environment cube",
         "frontend/goldMedal": "reflective, front end environment cube",
         "gfxWIREOverlaysXWing": "briefing wireframe from the collision hull",
+        "l08/02/tiles": "RS2 tile level: _tile##/_bldg## models, buildings from the tile _lm",
         "l05/01/objects": "level objects (dat, RS2 header), Star Destroyer parts on hull nodes",
     },
     3: {

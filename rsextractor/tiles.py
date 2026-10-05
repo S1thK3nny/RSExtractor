@@ -1,4 +1,4 @@
-"""RS3 tile levels: ``tmap`` + ``bmap`` lay out a level from square tiles and the
+"""Tile levels: ``tmap`` + ``bmap`` lay out a level from square tiles and the
 buildings standing on them (RS3 FUN_7f35cfb0, see docs/FORMATS.md "Tile maps").
 
 ``tmap``::
@@ -12,7 +12,8 @@ buildings standing on them (RS3 FUN_7f35cfb0, see docs/FORMATS.md "Tile maps").
 ``bmap``: per tile type ``{u32 count, u32 building[8]}`` (0x24 bytes, type in the
 low half). The tile's ``t###_0_lm`` holds one 3x4 matrix per building, relative
 to the tile. Tile models are ``t###_v``, buildings ``b###_v`` (``v`` = level of
-detail, 0 = full), kept in ``bData.pool`` packages the level references.
+detail, 0 = full), kept in ``bData.pool`` packages the level references (RS3) or
+in the level packages as ``_tile##/####_v`` and ``_bldg##/####_v`` (RS2).
 """
 from __future__ import annotations
 

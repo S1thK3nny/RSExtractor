@@ -192,9 +192,9 @@ def main(argv=None) -> int:
     pe.add_argument("--embed", action="store_true", help="embed textures inside the FBX files")
     pe.add_argument("--no-images", action="store_true", help="skip standalone images (menus, backdrops, fonts)")
     pe.add_argument("--no-tile-levels", action="store_true",
-                    help="skip assembling RS3 tile levels (Death Star, Bespin city ...) into one FBX each")
+                    help="skip assembling tile levels (Death Star, Bespin city ...) into one FBX each")
     pe.add_argument("--no-object-levels", action="store_true",
-                    help="skip placing the objects of each RS3 level resource into one FBX each")
+                    help="skip placing the objects of each level resource into one FBX each")
     pe.add_argument("--no-animations", action="store_true", help="export skeletons and skins but no animation clips")
     pe.add_argument("--no-skeletons", action="store_true", help="no bones, skins or animation (parts still keep their pivots)")
     pe.add_argument("-j", "--jobs", type=int, default=0,
