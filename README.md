@@ -49,6 +49,9 @@ python -m rsextractor extract rs2.iso --embed
 # skeletons and skins but no animation clips (much faster), or static meshes only
 python -m rsextractor extract rs3.iso --no-animations
 python -m rsextractor extract rs3.iso --no-skeletons
+
+# only the terrain of every level
+python -m rsextractor extract rs2.iso -f /terrain
 ```
 
 Output layout: `output/RS<n>/<archive>/<resource>/<model>.fbx` with the
@@ -96,6 +99,27 @@ balls, command deck and guns, the Bespin balloons' turbolasers, the gas
 platforms' containers) sit on the host's mount points; Rogue Leader's asteroid
 rocks are left out, since the asteroid fields scatter them at random while the
 level runs. Not placed: sound emitters and effects.
+
+Open levels of both games (Tatooine, Hoth, Yavin, Dantooine, Kothlis, Endor ...)
+get their terrain as `<level>_<resource>_terrain.fbx`: one mesh in metres, sharing
+the coordinates of the tile and object FBXs, built from every level of detail the
+disc stores (the finest data wherever it exists, coarser rings around it, no
+cracks between them; up to 3.4 million vertices for Rebel Strike's Hoth battle).
+The game textures the ground by blending tiling layers (sand, rock, snow) with
+small blend masks, which no single image can hold at full detail over 10 to 28 km.
+So the FBX shows a baked color texture (`textures/terrain_<id>_color`, up to 4096
+pixels), and next to it the export keeps the original layer textures, their blend
+weights (`terrain_<id>_weights<n>`, four layers per RGBA image) and
+`<level>_<resource>_terrain.json` describing how they combine. In Blender,
+`tools/blender_terrain.py` builds the full detail material from it:
+
+```sh
+blender --python tools/blender_terrain.py -- output/RS2/lvlPack00/l00/01/l00_01_terrain.json
+```
+
+A terrain identical to one earlier in its level (Rogue Leader's four Tatooine
+lighting variants) is written once; levels sharing a terrain get hard links.
+`--no-terrain` skips terrain, `-f /terrain` exports only terrain.
 
 Models with levels of detail get one empty per level (`<model>_LOD0`,
 `<model>_LOD1`, ...) holding that level's meshes, which carry the same suffix
@@ -154,7 +178,7 @@ Units are metres (1 game unit = 1 m), Y up.
 | Tile levels assembled from their tile maps | yes | yes |
 | Briefing and HUD wireframes (from the collision hull) | yes | yes |
 | Level objects placed from `dat`, capital ship parts on their mount points | yes | yes |
-| Terrain heightmaps (`h16_*.img`) | no | no |
+| Terrain (heightmaps, baked ground texture, blend layers) | yes | yes |
 | Sounds | no | no |
 
 Format notes: [docs/FORMATS.md](docs/FORMATS.md).

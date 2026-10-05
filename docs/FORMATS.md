@@ -208,6 +208,101 @@ counter, any other kind is left to scripts). AI craft and wingmen at the origin
 (`tieai`, `xwing_wm`) are spawned this way too; where they start is not worked
 out yet.
 
+## Terrain
+
+Both games draw the ground of open levels as a heightfield in nested levels of
+detail, each at twice the spacing of the one inside it, and texture it by blending
+tiling layer textures with 32 x 32 blend masks. "Base units" below are the vertex
+grid of the finest level.
+
+### Rogue Leader: `dat` + `mixmaps`
+
+`dat` `+0x58` holds (count, offset) of 0x4D4 byte terrain records (`FUN_7fd8a5d8`;
+`FUN_7fd8992c` relocates the pointers relative to the record array). Only one per
+level is used (`l00`, `l03`, `l04/02`, `l06`, `l07`, `l08/02`, `l12/02`, `l17`).
+
+```
++0x00 f32 origin[3]   +0x0C f32 axis u[3]   +0x18 f32 axis v[3]
++0x24 f32 cell x, height scale, cell z        (16, 1.6, 16 on Tatooine)
++0x30 u16 centre width, height (801)   +0x34 u16 blocks x, z (224, 8 x 8 vertices each)
++0x38 u16 centre origin in blocks x, z
++0x44 u16 block size (8)
++0x90 -> centre heights, s8 per vertex, row major
++0x94 4 rings of 0x28: u8 x[4], u8 z[4] (blocks), u16 stride[4], u16 rows[4], u32 -> s8 data[4]
+       strips left, right, top, bottom at 2, 4, 8, 16 times the spacing
++0x134 -> s8 min, max per block (ray casts)
++0x138 u8 per block column (x + 0x80), +0x298 per block row: 0 = centre,
+       0x80 = no terrain, else ring << 5 | side << 3
++0x478 u16 texture position offset x, z (0x2000)
++0x47C u16 layer count   +0x480 -> layers (0x30 each)
+```
+
+A vertex `(x, z)` (base units) lies at `origin + x * cell_x * u + h * height_scale *
+up + z * cell_z * v`, `up = v x u`. `FUN_7fcad488` reads a height: the larger of the
+column and row flags picks the ring and side, the strip vertex is `(x - 8 * strip_x)
+>> (ring + 1)`, and between strip vertices it interpolates on the triangle split
+along `(x + 1, z) - (x, z + 1)`. Mos Eisley's buildings and Beggar's Canyon line up
+with the objects of `dat` this way.
+
+Layers: `{sha1[20], u16 width, u16 height, u8 mips (CMPR), ..., +0x1C f32 scale u,
+scale v, rotation (degrees), offset u, offset v}`. The game generates texture
+coordinates from the position `P` in 1/16 vertex units: `(u, v) = R(rotation)
+diag(8 su, 8 sv) (Px - 0x2000, Pz - 0x2000) / 128 + offset`, with v negated
+(`FUN_7fd8ad84`).
+
+`mixmaps/MetaInfo_0`: u32 per block, high half the blend mask, low half bits 0-3 the
+layer count and bits 4-7, 8-11, 12-15 the layer indices. `MixInfo_0`: u32 count,
+then a u32 per mask, the offset in `Data_0` (bit 31: IA4, else I4), 32 x 32 with
+mipmaps, spanning the block edge to edge (texel 0 and 31 on the block's edges).
+Blend (`FUN_7fd2fd60`, `FUN_7fd2ff30`): two layers `I * first + (1 - I) * second`,
+three layers `I * first + A * second + (1 - I - A) * third`. The record's three
+textures at `+0x488` (sizes) / `+0x498` .. (keys) are detail maps. `shadow_0` is a run
+length encoded shadow mask evaluated against the sun angle (`FUN_7fcc6e48`); not
+exported.
+
+### Rebel Strike: `h16/streamInfo` + `h16_*.img`
+
+`h16/streamInfo` (`FUN_7f3534f0` relocates it) starts with the disc path of its
+image (`/Rogue3/h16_l_06_hoth_01.img`; several resources share one).
+
+```
++0x28 u8 block size (8), height bits (16), normal bytes flag, flag bits, bits per vertex
++0x30 u16[9] first row record of each level, rows keyed by block row
++0x42 u16[9] the same keyed by block column (the same data stored transposed)
++0x54 -> spans {s16 first, last block column}
++0x58 -> row records {s16 first, last block row, u16 spans, u16 first span,
+         u32 bits per block row, u32 bit offset in the image}
++0x74 terrain settings (+0x71 finest level with data, +0x190 mode)
++0x204 u8 texture grids, +0x208 -> 0x1C each {.., u16 cells x, z, -> u32 cells,
+       .., -> pages of 16 x 16 cells}
++0x210 -> u32 layer combinations   +0x256 u16 materials
++0x260 -> textures (0x28: u16 width, height, u8 mips, format, .., sha1 at +8)
++0x264 -> materials (0x38: u16 flags, u16 texture, .., f32 texture matrix 2 x 4 at +0x18)
++0x268 u32 blend masks, +0x270 -> their offsets (I4 or IA4, 32 x 32)
++0x28C f32 3 x 4 world -> grid,  +0x2BC grid -> world
+```
+
+The image is a big endian bit stream (`FUN_7f351e58`). A level has up to eight
+levels; level `L` has a vertex every `2^L` base units, and block `(row, column)`
+covers vertices `8 * row .. + 7` of that level. Each block is 8 x 8 vertices of
+`bits per vertex` bits, row major: the height in the top `height bits` (signed,
+shifted up to 16 bits), then three normal bytes if flagged, then the flag bits.
+Within a row record the blocks follow the spans in order. Coarser levels cover
+the same or a larger area (Hoth `L_06/01`: 1 m data at level 0; most levels start
+at level 4).
+
+Grid units are 8 base units; height `h` is `h / 256` grid units, so a vertex is
+at `M(+0x2BC) (x / 8, h / 256, z / 8, 1)` (Hoth's turrets stand on the ground this way;
+Bespin's underside has a negative x scale).
+
+Texture grid: cells of 16 grid units, `u32` each; when the top 10 bits are not 0x3FF
+they index a page of 16 x 16 cells of one grid unit. Cell: bits 2-10 index the
+combination list (bits 0-1 layer count, 7 bit material indices at bits 2, 9, 16),
+bits 11-21 the blend mask (`FUN_7f3550c8`; `FUN_7f354dec` reads the first material's
+color under a point). Masks and blending work as in Rogue Leader. A material's
+matrix maps grid coordinates to its texture's (u, v). Training's masks are random
+sand patches repeated over the map.
+
 ## Geometry `_ge`
 
 Relocatable image: pointers are offsets from the part start, 0 = NULL.

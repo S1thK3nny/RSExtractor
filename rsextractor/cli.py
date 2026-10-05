@@ -137,6 +137,20 @@ def cmd_extract(args) -> int:
                     if args.verbose:
                         traceback.print_exc()
             progress.clear()
+        if not args.no_terrain:
+            print("Building terrain...")
+            for level in game.iter_terrains(_filter(args.filter)):
+                label = f"{level.archive}/{level.entry}"
+                progress.show(1.0, f"terrain  {label}")
+                try:
+                    exporter.export_terrain(level)
+                except Exception as exc:
+                    failures += 1
+                    progress.clear()
+                    print(f"  FAILED terrain {label}: {exc}", file=sys.stderr, flush=True)
+                    if args.verbose:
+                        traceback.print_exc()
+            progress.clear()
         images = 0
         if not args.no_images:
             print("Exporting standalone images...")
@@ -157,6 +171,7 @@ def cmd_extract(args) -> int:
             f"{s['environment_maps']} environment maps",
             f"{s['tile_levels']} tile levels",
             f"{s['object_levels']} object levels",
+            f"{s['terrains']} terrains",
             f"{s['wireframes']} wireframes",
             f"{images} images",
             f"{s['skipped']} empty models skipped",
@@ -195,6 +210,8 @@ def main(argv=None) -> int:
                     help="skip assembling tile levels (Death Star, Bespin city ...) into one FBX each")
     pe.add_argument("--no-object-levels", action="store_true",
                     help="skip placing the objects of each level resource into one FBX each")
+    pe.add_argument("--no-terrain", action="store_true",
+                    help="skip the terrain of open levels (heightmap mesh, baked ground texture, blend layers)")
     pe.add_argument("--no-animations", action="store_true", help="export skeletons and skins but no animation clips")
     pe.add_argument("--no-skeletons", action="store_true", help="no bones, skins or animation (parts still keep their pivots)")
     pe.add_argument("-j", "--jobs", type=int, default=0,

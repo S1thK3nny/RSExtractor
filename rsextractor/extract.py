@@ -1,6 +1,8 @@
 """End-to-end extraction: disc image -> FBX models + PNG/TGA textures."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import struct
@@ -25,6 +27,7 @@ from .rig import Rig, add_animations
 from .scene import Scene, SceneMaterial, SceneMesh, SceneNode
 from .skeleton import evaluate_nodes, locators, place_static_meshes
 from .texture import TextureLibrary
+from .terrain import Terrain, bake, parse_rs2, parse_rs3, texture_size, world_mesh
 from .tiles import parse_bmap, parse_lm, parse_tmap, tile_cells
 
 Log = Callable[[str], None]
@@ -37,9 +40,13 @@ TEXTURE_FORMATS: Dict[str, dict] = {
 }
 
 
-def save_image(img: np.ndarray, path: str, fmt: str) -> None:
-    """Save an RGBA8 array as ``fmt`` (a key of ``TEXTURE_FORMATS``)."""
-    Image.fromarray(img, "RGBA").save(path, **TEXTURE_FORMATS[fmt])
+def save_image(img: np.ndarray, path: str, fmt: str, compress: bool = False) -> None:
+    """Save an RGBA8 array as ``fmt`` (a key of ``TEXTURE_FORMATS``); ``compress`` writes
+    TGA run length encoded (for data maps with large flat areas)."""
+    options = dict(TEXTURE_FORMATS[fmt])
+    if compress and fmt == "tga":
+        options["rle"] = True
+    Image.fromarray(img, "RGBA").save(path, **options)
 
 
 # GX formats whose alpha is real (IA4, IA8, RGB5A3, RGBA8); CMPR alpha is a 1 bit mask.
@@ -107,6 +114,16 @@ class ObjectLevel:
     entry: str
     objects: List[Placed]
     models: Dict[str, Dict[str, bytes]] = field(default_factory=dict)
+
+
+@dataclass
+class TerrainLevel:
+    """A level resource's terrain (RS2 ``dat`` + ``mixmaps``, RS3 ``h16/streamInfo`` + its
+    ``h16_*.img``); ``key`` tells identical terrains apart."""
+    archive: str
+    entry: str
+    key: str
+    terrain: Terrain
 
 
 TILE_MODEL = re.compile(r"[tb]\d{3}_0$")
@@ -443,6 +460,33 @@ class GameData:
                                               if f"{stem}_{sfx}" in source}
             yield level
 
+    def iter_terrains(self, filt: Optional[Callable[[str], bool]] = None) -> Iterator[TerrainLevel]:
+        """Level resources with terrain, matched by ``filt`` on ``archive/entry/terrain``."""
+        for archive, entry in self.iter_entries():
+            label = f"{self.archive_label(archive)}/{entry.name}"
+            if entry.name.endswith(("_tpi", "_tpd")) or (filt is not None and not filt(f"{label}/terrain")):
+                continue
+            data = self.read_entry(archive, entry)
+            pkg = parse_package(data)
+            if not pkg:
+                continue
+            files = {p.path: data[p.offset:p.offset + p.length] for p in pkg if not p.attrib & FOLDER}
+            terrain = None
+            if self.game == 2 and "dat" in files:
+                terrain = parse_rs2(files["dat"], files)
+                if terrain is not None:
+                    blob = files["dat"][struct.unpack_from(">I", files["dat"], 0x5C)[0]:] + b"".join(
+                        files.get(f"mixmaps/{n}_0", b"") for n in ("MetaInfo", "MixInfo", "Data"))
+            elif self.game == 3 and "h16/streamInfo" in files:
+                si = files["h16/streamInfo"]
+                path = si[:0x28].split(b"\0")[0].decode("ascii", "replace").strip("/")
+                if self.disc.exists(path):
+                    terrain = parse_rs3(si, self.disc.read(path))
+                    blob = si
+            if terrain is None:
+                continue
+            yield TerrainLevel(self.archive_label(archive), entry.name, hashlib.sha1(blob).hexdigest(), terrain)
+
     def _level_sources(self, archive: Archive, entry: Entry, files: Dict[str, bytes]) -> List[Dict[str, bytes]]:
         """A level resource's package, the other resources of its level (the tiles of
         ``X_lvl/01`` may be referenced by ``X_lvl/00``) and the pool packages they reference."""
@@ -714,13 +758,14 @@ class Exporter:
         self.log = log
         self.written_textures: Dict[str, str] = {}
         self.stats = {"models": 0, "skipped": 0, "textures": 0, "normal_maps": 0, "emissive_maps": 0,
-                      "specular_maps": 0, "environment_maps": 0, "tile_levels": 0, "object_levels": 0, "missing_textures": 0,
+                      "specular_maps": 0, "environment_maps": 0, "tile_levels": 0, "object_levels": 0, "terrains": 0, "missing_textures": 0,
                       "skeletons": 0, "animations": 0, "wireframes": 0}
         self.missing: List[str] = []
         self.missing_hashes: set = set()
         self.envmap_folders: set = set()
         self.object_levels_seen: Dict[Tuple[str, str], Dict[tuple, str]] = {}  # level -> placements -> resource
         self.tile_levels_seen: Dict[Tuple[str, str], Dict[tuple, str]] = {}  # level -> layout -> resource
+        self.terrains_seen: Dict[str, Tuple[str, List[str]]] = {}  # terrain key -> (first resource, files)
 
     def model_dir(self, m: ModelParts) -> str:
         parts = [safe_name(p) for p in m.entry.split("/")]
@@ -945,6 +990,88 @@ class Exporter:
         self.stats["object_levels"] += 1
         return path
 
+    def export_terrain(self, level: TerrainLevel) -> Optional[str]:
+        """``<level>_<resource>_terrain.fbx``: the terrain as one mesh (every level of
+        detail where no finer one covers the ground) with its blended ground texture
+        baked into one image. Next to it the original tiling layer textures, their blend
+        weights (four layers per RGBA image) and ``<name>.json`` describing how to
+        combine them (``tools/blender_terrain.py`` builds that material in Blender).
+        A terrain identical to one of an earlier resource is skipped within its level
+        and linked from the first copy in other levels."""
+        folder = os.path.join(self.out_dir, safe_name(level.archive), *[safe_name(p) for p in level.entry.split("/")])
+        base = safe_name(f"{level.entry.split('/')[0]}_{level.entry.split('/')[-1]}_terrain")
+        seen = self.terrains_seen.get(level.key)
+        if seen is not None:
+            first, files = seen
+            if first.split("/")[:2] == f"{level.archive}/{level.entry}".split("/")[:2]:
+                self.log(f"  terrain of {level.archive}/{level.entry} is the same as {first}, skipped")
+                return None
+            for source in files:  # the same terrain in another level: link the files
+                rel = os.path.relpath(source, os.path.dirname(files[0]))
+                if not rel.startswith("textures"):
+                    rel = base + os.path.splitext(source)[1]
+                target = os.path.join(folder, rel)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                if not os.path.exists(target):
+                    try:
+                        os.link(source, target)
+                    except OSError:
+                        with open(source, "rb") as src, open(target, "wb") as dst:
+                            dst.write(src.read())
+            self.stats["terrains"] += 1
+            return os.path.join(folder, base + ".fbx")
+        terrain = level.terrain
+        pos, tri, normals, uv = world_mesh(terrain)
+        if not len(tri):
+            return None
+        os.makedirs(folder, exist_ok=True)
+        tag = f"terrain_{level.key[:8]}"
+        written: List[str] = []
+        layers = []
+        images = []
+        for i, layer in enumerate(terrain.layers):
+            img = self._decode(layer.texture, f"{base} layer {i}")
+            images.append(img)
+            rel = self._texture_file(layer.texture, folder, "terrain") if img is not None else None
+            layers.append((rel, layer))
+            if rel:
+                written.append(os.path.join(folder, rel))
+        color_rel = None
+        weight_rels: List[str] = []
+        if terrain.cells is not None and terrain.layers:
+            size = texture_size(terrain)
+            color, weights = bake(terrain, images, size, size)
+            color_rel = self._image_file(folder, f"{tag}_color", f"{level.key}_color", "", lambda: color)
+            for k, w in enumerate(weights):
+                rel = self._image_file(folder, f"{tag}_weights{k}", f"{level.key}_weights{k}", "", lambda w=w: w,
+                                       compress=True)
+                weight_rels.append(rel)
+            written += [os.path.join(folder, r) for r in [color_rel] + weight_rels if r]
+        scene = Scene(base)
+        scene.nodes.append(SceneNode(base))
+        scene.materials.append(SceneMaterial(base, texture=color_rel, wrap_u=False, wrap_v=False))
+        scene.meshes.append(SceneMesh(base, pos, tri, normals=normals, uvs=[uv], material=0, node=0))
+        path = os.path.join(folder, base + ".fbx")
+        write_fbx(scene, path, embed_textures=self.embed)
+        sidecar = {
+            "mesh": base,
+            "color": color_rel,
+            "weights": weight_rels,
+            # uv: texture (u, v) = uv @ (U, V, 1) with (U, V) the terrain UV in image
+            # orientation (V down, as the color and weight images are stored)
+            "layers": [{"texture": rel, "weights": [i // 4, "RGBA"[i % 4]],
+                        "uv": (layer.uv @ np.array([[terrain.rect[2] - terrain.rect[0], 0, terrain.rect[0]],
+                                                    [0, terrain.rect[3] - terrain.rect[1], terrain.rect[1]],
+                                                    [0, 0, 1]])).round(9).tolist()}
+                       for i, (rel, layer) in enumerate(layers)],
+        }
+        with open(os.path.join(folder, base + ".json"), "w", encoding="utf-8") as f:
+            json.dump(sidecar, f, indent=1)
+        self.terrains_seen[level.key] = (f"{level.archive}/{level.entry}",
+                                         [path, os.path.join(folder, base + ".json")] + written)
+        self.stats["terrains"] += 1
+        return path
+
     def _prototype(self, parts: Optional[Dict[str, bytes]], name: str, folder: str,
                    scene: Scene) -> List[Tuple[Mesh, int]]:
         """Full detail meshes of a model in model space (rigid parts at rest, skins in
@@ -1102,7 +1229,7 @@ class Exporter:
                                 "emissive", make)
 
     def _image_file(self, folder: str, stem: str, key: str, kind: str,
-                    make: Callable[[], Optional[np.ndarray]]) -> Optional[str]:
+                    make: Callable[[], Optional[np.ndarray]], compress: bool = False) -> Optional[str]:
         """Write ``make()`` as ``folder/textures/stem`` once per ``key`` (later uses link or copy the file)."""
         fname = f"{stem}.{self.texture_format}"
         rel = f"textures/{fname}"
@@ -1115,7 +1242,7 @@ class Exporter:
                 self.written_textures[key] = ""
                 return None
             os.makedirs(os.path.dirname(target), exist_ok=True)
-            save_image(img, target, self.texture_format)
+            save_image(img, target, self.texture_format, compress)
             self.written_textures[key] = target
             self.stats[{"normal": "normal_maps", "emissive": "emissive_maps",
                         "specular": "specular_maps"}.get(kind, "textures")] += 1

@@ -32,6 +32,7 @@ SAMPLES = {
         "gfxWIREOverlaysXWing": "briefing wireframe from the collision hull",
         "l08/02/tiles": "RS2 tile level: _tile##/_bldg## models, buildings from the tile _lm",
         "l05/01/objects": "level objects (dat, RS2 header), Star Destroyer parts on hull nodes",
+        "l08/02/terrain": "terrain from dat (centre and rings), mixmaps blend layers and bake",
     },
     3: {
         "plCraft/xwing_base": "craft + cockpit: emboss from color alpha, self lit, animation, wireframe (compact hull records)",
@@ -50,6 +51,8 @@ SAMPLES = {
         "RAC_F_DeathStarTrench_lvl/01/objects": "level objects (dat): wall turrets need X before Z, flt models",
         "B_02_Hoth_lvl/03/objects": "Star Destroyer parts on named hull locators",
         "RAC_F_DeathStarTrench_lvl/01/tiles": "tile layout half a cell in from the grid corner (matches the objects)",
+        "Training_lvl/01/terrain": "h16 terrain, levels 4..7, I4 blend masks",
+        "B_03_Bespin_lvl/02/terrain": "mirrored h16 terrain (Bespin's underside)",
     },
 }
 
