@@ -874,6 +874,8 @@ class Exporter:
             self.log(f"  objects of {level.archive}/{level.entry} are the same as {same[signature]}, skipped")
             return None
         same[signature] = f"{level.archive}/{level.entry}"
+        if not any(name is not None for name, _ in resolved):
+            return None  # nothing with a model (only start points, triggers, cutscene references)
         folder = os.path.join(self.out_dir, safe_name(level.archive), *[safe_name(p) for p in level.entry.split("/")])
         os.makedirs(folder, exist_ok=True)
         base = safe_name(f"{level.entry.split('/')[0]}_{level.entry.split('/')[-1]}_objects")
