@@ -13,6 +13,7 @@ from .disc import Disc
 from .anim import Runtime
 from .rig import make_pool
 from .extract import TEXTURE_FORMATS, Exporter, GameData, detect_game, export_images
+from .levels import write_level_index
 
 
 def _filter(patterns):
@@ -79,6 +80,7 @@ def cmd_extract(args) -> int:
         print(f"{disc.game_id}  {disc.title} -> {out}")
         game = GameData(disc)
         t0 = time.time()
+        write_level_index(game, out)
         print("Indexing texture pools...")
         game.index_textures()
         runtime = pool = None

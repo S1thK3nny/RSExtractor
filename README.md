@@ -67,6 +67,48 @@ texture names, so the material name (often a Maya default like `phong31`) is the
 best label there is. Player craft live under
 `data/plCraft/...`, level content under `lvlPackNN/...`.
 
+### Which level is which
+
+Level folders keep the disc's names: `lvlPackNN/<level>/<resource>`. `lvlPackNN` is
+only the archive file a level is stored in. In each level, `00` is what the whole
+level shares, `01`, `02` ... are its parts (the game loads `00` plus one part and
+moves on to the next during the mission), and `NNcMM` is cutscene `MM` of part `NN`.
+Every extraction writes `LEVELS.md` into `output/RS<n>` with each level folder,
+its mission title from the game's own text, and its resources.
+
+Rogue Leader numbers its levels; the mission select uses the same numbers:
+
+| Level | Mission | Level | Mission |
+| --- | --- | --- | --- |
+| `l00` | Tatooine Training | `l11` | Death Star Escape (bonus) |
+| `l01` | Death Star Attack | `l12` | The Asteroid Field (bonus) |
+| `l02` | Ison Corridor Ambush | `l13` | sky and a TIE fighter cutscene |
+| `l03` | Battle of Hoth | `l14`, `l26` | ending celebration cutscene |
+| `l04` | Prisons of the Maw | `l15` | Endurance (bonus) |
+| `l05` | Razor Rendezvous | `l16` | Triumph of the Empire (bonus) |
+| `l06` | Vengeance on Kothlis | `l17` | Revenge on Yavin (bonus) |
+| `l07` | Imperial Academy Heist | `l18` .. `l21` | hangars: Hoth, Mon Calamari, Yavin, Imperial |
+| `l08` | Raid on Bespin | `l22` | Death Star scene loaded at start up |
+| `l09` | Battle of Endor | `l23` | sky only |
+| `l10` | Strike at the Core | | |
+
+Rebel Strike names its level folders; `L_` levels are Luke's, `W_` Wedge's, `E_`
+the Endor finale, `B_` bonus missions, `coop_NN` the Rogue Leader mission of level
+`lNN` for two players, and `DOG_`, `RAC_`, `RAM_`, `TAG_` the versus levels:
+
+| Folder | Mission | Folder | Mission |
+| --- | --- | --- | --- |
+| `Training_lvl` | Tatooine Training | `W_05_FondorShipyards_lvl` | Fondor Shipyard Assault |
+| `L_01_Yavin_lvl` | Revenge of the Empire | `E_01_Luke_lvl` | Speeder Bike Pursuit |
+| `L_02_Dantooine_lvl` | Defiance on Dantooine | `E_02_Han_lvl` | Triumph of the Rebellion |
+| `L_03_Ralltiir_lvl` | Defenders of Ralltiir | `B_01_DeathStarEscape_lvl` | Death Star Rescue |
+| `L_04_Ralltiir_Part2_lvl` | Extraction from Ralltiir | `B_02_Hoth_lvl` | Escape from Hoth |
+| `L_06_Hoth_lvl` | Battlefield Hoth | `B_03_Bespin_lvl` | Flight from Bespin |
+| `W_01_Bakura_lvl` | Raid at Bakura | `B_04_Dagobah_lvl` | Trials of a Jedi |
+| `W_02_Ep2_lvl` | Relics of Geonosis | `B_05_SarlaccPit_lvl` | The Sarlacc Pit |
+| `W_03_Omega3and4_lvl` | Deception at Destrillion | `B_06_Executor_lvl` | Attack on the Executor |
+| `W_04_Omega4_lvl` | Guns of Dubrillion | `B_07_Endurance_lvl` | Rebel Endurance |
+
 Some materials multiply their color by the model's vertex colors before lighting
 (the reddish patches on the Mon Calamari cruiser hull, scorch marks on destroyed
 buildings and debris). FBX has no way to say that, so these materials carry the

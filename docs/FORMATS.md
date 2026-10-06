@@ -86,6 +86,40 @@ A model named `X` consists of `X_su` (setup), `X_ge` (geometry), `X_si`
 (materials), optional `X_an` (animation), `X_cl` (collision, see below) and, in RS3, `X_nm`
 (names). Texture pools are `*_tpi` + `*_tpd`.
 
+## Levels and mission titles
+
+Level resources are archive entries `<level>/<resource>`: RS2 `l%02d/%02d` (level
+`DAT_7fde822c`, resource = part `DAT_7fde8230` + 1, `FUN_7fd5a4a0`), RS3
+`<Name>_lvl/%02d`. `00` is loaded for the whole level, one part on top of it, and the
+next part follows during the mission (`DAT_7fde8230 + 2`). Cutscenes are
+`l%02d/%02dc%02d` (same level and part, cutscene number; `FUN_7fd52a58`) with the rig
+`cut%02d%d%02d` (level, part - 1, cutscene). `lvlPackNN` archives only bundle levels.
+
+RS2 text is `data/text/English`: ASCII keys (`FrntEnd/rbr/lvl/l05`) each followed by
+its UTF-16 text. The mission select stores the chosen entry as the level number
+(`FUN_7fd73690`: `DAT_7fde8258` = byte `r13 - 0x4ab4`) and shows the title from the
+table at `0x7fde2a1c` indexed by that same byte (`FUN_7fd73dac`): keys `lvl/l00` ..
+`l10` for levels 0 .. 10 (training and missions 1 .. 10), `b01`, `b02` for 11, 12 and
+`b05` .. `b07` for 15 .. 17; 13 and 14 are empty. The start part is 0, except
+Tatooine and the Academy (`FUN_7fd8057c`) and Strike at the Core (part 2 when
+`DAT_7fde826c == 5`). Other levels are loaded by fixed numbers: 13, 14, 23 from front
+end menu entries (`FUN_7fd7618c`, `FUN_7fd76204`, `FUN_7fd76114`), 22 at start up
+(`FUN_7fc032bc`) and when a level ends in mode 5 (`FUN_7fc002c0`), 12 by the attract
+loop (`FUN_7fd6c32c`).
+
+RS3 text is in two packages (`txtTables`, `txtData`) zlib packed inside the boot DOL,
+one per language (English at boot DOL file offset `0x26b104`, after the inner DOL), loaded by
+`FUN_7f3e3758`. `txtTables` is `u32 fonts, fonts x 60 bytes {char name[32], ...},
+u32 strings, u32 offsets[strings]` into `txtData`, which holds the same key and UTF-16
+text pairs as RS2. The mission title table at `0x7f6841e4` lists
+`frntend/rbr/lvl2/<key>` in `levelInfo` order: `t01` Training, `e01`, `e02`, four
+empty hangar slots, `l01` .. `l06`, `w01` .. `w05`, then the co-op levels with the
+Rogue Leader titles (`rbr/lvl/l01` .. `l10`, `b01`, `b02`, `b05`; `coop_NN` is
+Rogue Leader level `NN`), the versus levels and `lvl2/b01` .. `b07`. The key is the
+folder's letter and number (`L_02_Dantooine` = `l02`). Versus levels have their own
+keys, `FrntEnd/versus/levelSelect/levelNames/<folder>`. `rsextractor/levels.py`
+holds both games' titles and writes `LEVELS.md`.
+
 ## Tile maps
 
 Levels of both games are built from square tiles on a grid (RS3: Death Star
