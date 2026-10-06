@@ -1,248 +1,59 @@
 # RSExtractor
 
-Extracts 3D models, materials and textures from the GameCube games
-**Star Wars Rogue Squadron II: Rogue Leader** and **Star Wars Rogue Squadron
-III: Rebel Strike**, straight from your own disc images.
+RSExtractor extracts 3D models, materials, textures and whole levels from the
+GameCube games **Star Wars Rogue Squadron II: Rogue Leader** and **Star Wars
+Rogue Squadron III: Rebel Strike**, straight from your own disc images.
 
-* Models → binary **FBX 7.4** (meshes, normals, UVs, vertex colors, materials,
-  texture links, skeletons, skin weights and animation clips). Imports into
-  Blender, Maya, 3ds Max, Unity and Unreal.
-* Textures → **PNG** or **TGA** (32-bit with alpha) next to each model
-  (`textures/`), full resolution (including RS3's streamed high-resolution mips).
-* Bump maps → tangent space **normal maps** (`*_normal`, OpenGL convention) linked
-  to the FBX materials, height maps also as gray `*_height` images.
-* Self lit masks (cockpit lights, windows) → **emissive maps** (`*_emissive`) linked
-  to the FBX materials. Color textures keep alpha only where the game uses it as
-  transparency (opacity maps are baked into it); otherwise they are opaque.
-* Highlights → specular color, shininess (as a Blinn-Phong exponent) and, where
-  the game masks them with the color map, **specular maps** (`*_specular`).
-* Reflections → the material's reflectivity as the FBX reflection factor
-  (Blender: metallic), and every level's environment cube as six faces plus an
-  equirectangular **panorama** (`envmap/panorama`) to use as the world.
-* Vertex color tints (the Mon Calamari cruiser hull, scorched wrecks and debris) →
-  the vertex colors plus an `rsVertexTint` custom property on the material;
-  `tools/blender_vertex_tint.py` multiplies them into the color in Blender.
-* Standalone images (menus, backdrops, gallery art, HUD, fonts) → PNG or TGA.
+* Models are written as binary FBX 7.4 files with their meshes, normals, UVs,
+  vertex colors, materials, texture links, skeletons, skin weights and animation
+  clips. They import into Blender, Maya, 3ds Max, Unity and Unreal.
+* Textures are saved as *.png* or *.tga* (32-bit with alpha) at full resolution,
+  including RS3's streamed high-resolution mips. Normal, height, emissive and
+  specular maps are derived from the game's materials and linked to them.
+* Every level gets its placed objects, its assembled tile levels, the terrain of
+  open levels and one full map per level resource with its sky.
+* Each level's environment cube is saved as six faces and as a panorama, so
+  reflective materials can mirror it.
+* Standalone images such as menus, backdrops, gallery art, the HUD and fonts are
+  saved as .png or .tga too.
+
+RSExtractor contains no game data and works only from your own copies of the games.
+It was developed and tested with the USA releases, version 1.0 of Rogue Leader
+(`GSWE64`) and version 1.1 of Rebel Strike (`GLRE64`); other versions and regions
+are untested.
 
 ## Requirements
 
-* Python 3.9+
-* `numpy` and `Pillow` (`pip install -r requirements.txt` or `pip install .`)
-* Your own disc images: plain `.iso`/`.gcm` or NKit `.nkit.iso`.
-  Tested with `GSWE64` (Rogue Leader, USA) and `GLRE64` (Rebel Strike, USA).
+* Python 3.9 or newer.
+* `numpy` and `Pillow`, installed with `pip install -r requirements.txt` or `pip install .`.
+* Your own disc images, either plain `.iso`/`.gcm` files or NKit `.nkit.iso` files.
 
-## Usage
+## Quick start
 
 ```sh
-# everything (models + textures + images), output in ./output/RS2 or ./output/RS3
+# everything, output in ./output/RS2 or ./output/RS3
 python -m rsextractor extract "Star Wars - Rogue Squadron II - Rogue Leader (USA).nkit.iso"
 
-# only some models: substring/glob on archive/entry/model
+# only some models (substring or glob on archive/entry/model)
 python -m rsextractor extract rs3.iso -o out -f plCraft/xwing -f falcon
 
 # list the models on a disc
 python -m rsextractor list rs2.iso -f lvlPack01
-
-# write textures and images as TGA instead of PNG
-python -m rsextractor extract rs2.iso -t tga
-
-# embed the textures inside the FBX files instead of referencing them
-python -m rsextractor extract rs2.iso --embed
-
-# skeletons and skins but no animation clips (much faster), or static meshes only
-python -m rsextractor extract rs3.iso --no-animations
-python -m rsextractor extract rs3.iso --no-skeletons
-
-# only the terrain of every level
-python -m rsextractor extract rs2.iso -f /terrain
-
-# only the full map of one level resource (terrain, tiles, objects, sky)
-python -m rsextractor extract rs2.iso -f l08/02/map
 ```
 
-Output layout: `output/RS<n>/<archive>/<resource>/<model>.fbx` with the
-model's textures in `.../<resource>/textures/`, named
-`<model>_<material>_<sha1 prefix>[_normal|_height|_emissive|_specular]`. The discs keep no
-texture names, so the material name (often a Maya default like `phong31`) is the
-best label there is. Player craft live under
-`data/plCraft/...`, level content under `lvlPackNN/...`.
+A full Rebel Strike extraction writes about 10 GB and takes a while; see
+[docs/USAGE.md](docs/USAGE.md) for all options and filters.
 
-### Which level is which
+## Documentation
 
-Level folders keep the disc's names: `lvlPackNN/<level>/<resource>`. `lvlPackNN` is
-only the archive file a level is stored in. In each level, `00` is what the whole
-level shares, `01`, `02` ... are its parts (the game loads `00` plus one part and
-moves on to the next during the mission), and `NNcMM` is cutscene `MM` of part `NN`.
-Every extraction writes `LEVELS.md` into `output/RS<n>` with each level folder,
-its mission title from the game's own text, and its resources.
-
-Rogue Leader numbers its levels; the mission select uses the same numbers:
-
-| Level | Mission | Level | Mission |
-| --- | --- | --- | --- |
-| `l00` | Tatooine Training | `l11` | Death Star Escape (bonus) |
-| `l01` | Death Star Attack | `l12` | The Asteroid Field (bonus) |
-| `l02` | Ison Corridor Ambush | `l13` | sky and a TIE fighter cutscene |
-| `l03` | Battle of Hoth | `l14`, `l26` | ending celebration cutscene |
-| `l04` | Prisons of the Maw | `l15` | Endurance (bonus) |
-| `l05` | Razor Rendezvous | `l16` | Triumph of the Empire (bonus) |
-| `l06` | Vengeance on Kothlis | `l17` | Revenge on Yavin (bonus) |
-| `l07` | Imperial Academy Heist | `l18` .. `l21` | hangars: Hoth, Mon Calamari, Yavin, Imperial |
-| `l08` | Raid on Bespin | `l22` | Death Star scene loaded at start up |
-| `l09` | Battle of Endor | `l23` | sky only |
-| `l10` | Strike at the Core | | |
-
-Rebel Strike names its level folders; `L_` levels are Luke's, `W_` Wedge's, `E_`
-the Endor finale, `B_` bonus missions, `coop_NN` the Rogue Leader mission of level
-`lNN` for two players, and `DOG_`, `RAC_`, `RAM_`, `TAG_` the versus levels:
-
-| Folder | Mission | Folder | Mission |
-| --- | --- | --- | --- |
-| `Training_lvl` | Tatooine Training | `W_05_FondorShipyards_lvl` | Fondor Shipyard Assault |
-| `L_01_Yavin_lvl` | Revenge of the Empire | `E_01_Luke_lvl` | Speeder Bike Pursuit |
-| `L_02_Dantooine_lvl` | Defiance on Dantooine | `E_02_Han_lvl` | Triumph of the Rebellion |
-| `L_03_Ralltiir_lvl` | Defenders of Ralltiir | `B_01_DeathStarEscape_lvl` | Death Star Rescue |
-| `L_04_Ralltiir_Part2_lvl` | Extraction from Ralltiir | `B_02_Hoth_lvl` | Escape from Hoth |
-| `L_06_Hoth_lvl` | Battlefield Hoth | `B_03_Bespin_lvl` | Flight from Bespin |
-| `W_01_Bakura_lvl` | Raid at Bakura | `B_04_Dagobah_lvl` | Trials of a Jedi |
-| `W_02_Ep2_lvl` | Relics of Geonosis | `B_05_SarlaccPit_lvl` | The Sarlacc Pit |
-| `W_03_Omega3and4_lvl` | Deception at Destrillion | `B_06_Executor_lvl` | Attack on the Executor |
-| `W_04_Omega4_lvl` | Guns of Dubrillion | `B_07_Endurance_lvl` | Rebel Endurance |
-
-Some materials multiply their color by the model's vertex colors before lighting
-(the reddish patches on the Mon Calamari cruiser hull, scorch marks on destroyed
-buildings and debris). FBX has no way to say that, so these materials carry the
-custom property `rsVertexTint` and the vertex colors are in the mesh's color layer.
-`tools/blender_vertex_tint.py` imports FBX files and puts a Color Attribute multiply
-in front of the Base Color of every such material; run without files (or from
-Blender's Text Editor) it fixes the materials already in the scene:
-
-```sh
-blender --python tools/blender_vertex_tint.py -- output/RS2/lvlPack02/l09/01/gfxcalamaricruiser.fbx
-```
-
-Rebel Strike keeps most level models (walkers, troopers, buildings, props) in
-the shared `bData.pool`, referenced from the levels. Each one is written once,
-next to the first level resource that uses it (the AT-AT lands in
-`lvlPack02/L_03_Ralltiir_lvl/01c01/fltATAT_ai.fbx` and
-`lvlPack02/L_06_Hoth_lvl/01/grndATAT_ai.fbx`); `-f` with the name of any level
-that uses a model selects it too. The few pool models no level references go to
-`bData/<model>/`. Characters also get the shared clip sets their levels load
-(run, crouch, death ... for stormtroopers, officers, Ewoks, Jawas). The clips
-cutscenes play on their cast (Luke's dance in the credits, the stormtroopers of
-the Yavin cutscenes ...) go to that model too, to its copy in the cutscene's
-level when the level has one; the cutscene model keeps only its own rig's clip.
-
-Both games build several levels from square tiles with buildings on them
-(Rebel Strike: both Death Star surfaces, the trench run, the Executor hull,
-Fondor, the Academy, Ralltiir, Bespin's cloud city; Rogue Leader: the Death
-Star surfaces of both Death Stars, the Imperial Academy, Cloud City). Each such
-level resource also gets the
-assembled layout, `<level>_<resource>_tiles.fbx`, with every tile and building
-copied into place at full detail; copies of the same mesh are merged per tile
-or building type, so Blender imports a few hundred objects. They are big (up to
-~170 MB for the largest Death Star map); `--no-tile-levels` skips them, and
-`-f /tiles` exports only them. A resource with the same layout as an earlier one
-of its level (Rogue Leader `l07/02`, `l10/03`) is written once, under the first.
-
-Every level resource of both games also gets the objects it places (turrets,
-walkers, buildings, crates, troopers, rocks, asteroids ...) in
-`<level>_<resource>_objects.fbx`: each placed model copied into place at full
-detail, copies of the same mesh merged, one empty per model. Characters stand in
-their bind pose. They share the coordinates of the tile level next to them, so
-importing both gives the trench with its turrets and barriers. `--no-object-levels`
-skips them, and `-f /objects` exports only them. Resources that place exactly the
-same objects as an earlier one of their level (Rogue Leader's four Tatooine
-variants `l00/01` .. `04`, which differ only in lighting) are written once, under
-the first. The parts the game mounts on a host (the Star Destroyer's sensor
-balls, command deck and guns, the Bespin balloons' turbolasers, the gas
-platforms' containers) sit on the host's mount points; Rogue Leader's asteroid
-rocks are left out, since the asteroid fields scatter them at random while the
-level runs. Not placed: sound emitters and effects. Rebel Strike's indoor levels
-(hangars, Echo Base, the Death Star escape, the Yavin temple, Endor's bunker ...)
-build their walls and floors from rooms that a separate room list places; those
-rooms go into the same file under `<level>_<resource>_rooms`.
-
-Open levels of both games (Tatooine, Hoth, Yavin, Dantooine, Kothlis, Endor ...)
-get their terrain as `<level>_<resource>_terrain.fbx`: one mesh in metres, sharing
-the coordinates of the tile and object FBXs, built from every level of detail the
-disc stores (the finest data wherever it exists, coarser rings around it, no
-cracks between them; up to 3.4 million vertices for Rebel Strike's Hoth battle).
-The game textures the ground by blending tiling layers (sand, rock, snow) with
-small blend masks, which no single image can hold at full detail over 10 to 28 km.
-So the FBX shows a baked color texture (`textures/terrain_<id>_color`, up to 4096
-pixels), and next to it the export keeps the original layer textures, their blend
-weights (`terrain_<id>_weights<n>`, four layers per RGBA image) and
-`<level>_<resource>_terrain.json` describing how they combine. In Blender,
-`tools/blender_terrain.py` builds the full detail material from it:
-
-```sh
-blender --python tools/blender_terrain.py -- output/RS2/lvlPack00/l00/01/l00_01_terrain.json
-```
-
-A terrain identical to one earlier in its level (Rogue Leader's four Tatooine
-lighting variants) is written once; levels sharing a terrain get hard links.
-`--no-terrain` skips terrain, `-f /terrain` exports only terrain.
-
-Every level resource also gets its whole map in one file,
-`<level>_<resource>_map.fbx`: the terrain, tiles and objects above, each under its
-own empty, plus the sky. Both games draw the sky around the camera (domes about
-140 m across, star layers, cloud rings, planets), so the map puts the sky under
-`<level>_<resource>_map_sky`, an empty centred on the level and scaled until the
-dome reaches 1.5 times past the level's edge; scale that empty to taste. Rogue
-Leader's skies are the models the game loads for the level and resource (`sky##`
-and its extras from the resource or `X/00`); Rebel Strike's are the sky packages
-and sky objects of the resource and `X_lvl/00`, without the horizon bands the game
-scales by code and with Tatooine's day sky of its four times of day. The skies
-leave the object FBXs. A map identical to an earlier one of its level is written
-once. The maps repeat the geometry of the separate files (Rebel Strike's Hoth
-battle map is ~420 MB); `--no-maps` skips them, `-f /map` exports only maps. In
-Blender raise the camera's clip end to see a whole map.
-
-Objects placed at height -FLT_MAX (the Academy's radar dishes) stand on the tiles
-or terrain below them. Materials the game blends by adding their color (star
-layers, horizon bands, explosions) are written with alpha equal to their brightest
-channel, so black adds nothing and the rest looks as in the game over a dark sky.
-
-Models with levels of detail get one empty per level (`<model>_LOD0`,
-`<model>_LOD1`, ...) holding that level's meshes, which carry the same suffix
-(`<model>_07_LOD1`; `_LOD2_3` = shown in LOD2 and LOD3). Meshes drawn at every
-distance hang directly under the model root. LOD0 is the full detail version.
-
-Models with moving parts but no skinning (S-foils, cockpits, turrets, wing
-hinges) keep the game's part hierarchy as empties: every part hangs under an
-empty placed on its pivot (the Maya rotate pivot), so rotating that empty swings
-the part around its real hinge. Meshes that do not belong to a part stay under
-the model root.
-
-Animated models and anything with joints or skinned meshes (characters,
-walkers) get a skeleton instead: a root bone named after the model and
-one bone per node (Rebel Strike has the original Maya names, Rogue Leader
-numbered ones). Every animation clip of the model becomes an animation take
-(Blender: one action per clip), baked at 24 frames per second. Clips are
-evaluated by running the game's own per-model animation code (curves,
-expressions, IK) in a small PowerPC interpreter, so walkers keep their feet
-planted exactly as in the game. This is CPU heavy: animation evaluation runs in
-parallel on all cores (`-j` to change), a full Rebel Strike extraction with its
-~1100 clips takes a while; `--no-animations` skips it.
-
-Reflective materials (canopies, chrome, medals, the Death Star core) mirror the
-environment cube of the level they are drawn in. Each level resource writes its
-cube to `.../<resource>/envmap/` (`rgt`, `lft`, `top`, `bot`, `frt`, `bck` and
-`panorama`); Rogue Leader's loose cubes land in `data/images/envmap/<name>/`.
-The panorama is laid out for Blender: use it in an Environment Texture node of
-the world and the imported models reflect it the way they do in the game. Models
-outside levels (`data/plCraft`) have no cube of their own; any level's will do.
-
-Briefing and HUD wireframes (Rogue Leader `data/briefing/gfxWIREOverlays*`,
-Rebel Strike `wireOverlay*` next to each craft, character and weapon) are drawn by
-the game from the model's collision hull; their visible geometry is just a flat
-quad. The FBX carries that hull as an extra mesh `<model>_wire` with the game's
-own polygons (not triangulated), so showing only its edges gives the game's
-lines: in Blender add a Wireframe modifier (or set the object to display as
-wire) and give the `wireframe` material an emission color.
-
-Units are metres (1 game unit = 1 m), Y up.
+| Document | Contents |
+| --- | --- |
+| [docs/USAGE.md](docs/USAGE.md) | Commands, options and filter examples |
+| [docs/OUTPUT.md](docs/OUTPUT.md) | Folder layout, file naming and what each exported file contains |
+| [docs/LEVELS.md](docs/LEVELS.md) | Which level folder is which mission in both games |
+| [docs/BLENDER.md](docs/BLENDER.md) | Importing into Blender and the helper scripts in `tools/` |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Smoke test, FBX validator and code layout |
+| [docs/FORMATS.md](docs/FORMATS.md) | Reverse engineered file formats of both games |
 
 ## Status
 
@@ -265,29 +76,12 @@ Units are metres (1 game unit = 1 m), Y up.
 | Full maps (terrain, tiles, objects and sky in one FBX) | yes | yes |
 | Sounds | no | no |
 
-Format notes: [docs/FORMATS.md](docs/FORMATS.md).
+## Known issues
 
-### Alternative output formats
+Sky domes get their color from their vertex colors. Blender imports those as a
+color attribute but its materials don't use it, so the domes look white or grey
+until you plug a Color Attribute node into their Base Color.
 
-FBX is the default. The exporter works from a format-neutral scene
-(`rsextractor/scene.py`), so glTF 2.0 (`.glb`) or OBJ/MTL writers can be
-added without touching the game parsers. glTF would be the better choice for
-web or engine pipelines.
+## License
 
-## Development
-
-`tools/smoketest.py` extracts a handful of models per game that together cover
-every feature (skeletons, IK, pool models, streamed textures, every bump, opacity
-and self lit case, tile levels, objects, terrain and maps) into `output/_test` in
-about four minutes, instead of a full run (Rebel Strike alone writes ~10 GB in
-~30 min). It fails on any failed model or missing texture; arguments after `--` go
-to `extract`:
-
-```
-python tools/smoketest.py rs2.iso rs3.iso -o output/_test -- -v
-```
-
-`tools/fbxdump.py` is an independent FBX reader that validates the binary
-structure of exported files (`python tools/fbxdump.py model.fbx --tree`).
-
-This project contains no game data. You need your own copies of the games.
+RSExtractor is released under the [MIT License](LICENSE).

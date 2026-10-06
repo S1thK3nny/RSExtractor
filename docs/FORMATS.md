@@ -1,10 +1,26 @@
 # Rogue Squadron II / III file formats
 
-Notes from reverse engineering the GameCube releases (`GSWE64` Rogue Leader,
-`GLRE64` Rebel Strike, both USA). Function names refer to the relocated game
+Notes from reverse engineering the GameCube releases (`GSWE64` Rogue Leader
+USA 1.0, `GLRE64` Rebel Strike USA 1.1). Function names refer to the relocated game
 code (see "Executables").
 
 All multi-byte values are big-endian.
+
+**Contents**
+
+* Containers: [Executables](#executables) · [Archives](#archives-dir--dat) ·
+  [Packages](#packages)
+* Levels: [Levels and mission titles](#levels-and-mission-titles) ·
+  [Tile maps](#tile-maps) · [Level objects](#level-objects-dat) · [Skies](#skies) ·
+  [Terrain](#terrain) ([Rogue Leader](#rogue-leader-dat--mixmaps),
+  [Rebel Strike](#rebel-strike-h16streaminfo--h16_img))
+* Models: [Geometry](#geometry-_ge) · [Collision](#collision-_cl)
+* Surfaces: [Materials](#materials-_si-abme) ([Highlights and reflections](#highlights-and-reflections),
+  [Environment cubes](#environment-cubes), [Bump maps](#bump-maps)) ·
+  [Textures](#textures)
+* Rigs: [Setup and node placement](#setup-_su-and-node-placement) ·
+  [Skinning](#skinning) · [Animation](#animation) ([Setup code](#setup-code),
+  [Clips](#clips-_an))
 
 ## Executables
 
@@ -208,12 +224,12 @@ a template (the guns) is spawned once per mount.
 RS2 mounts are `_su` output matrices: game index `k` is node `k - 1` (0 is the
 model root, the same numbering as the command stream's parents).
 
-| class | host | part → game nodes |
+| class | host | parts and the game nodes they mount on |
 |-------|------|-------------------|
-| 40 | Star Destroyer (`FUN_7fd96a14`) | `+0xE0..+0xEC` sensor balls left, right, big, command deck → 0x10..0x13; first class 44 (ion cannon) → 8, F, D, E, C, 9, B, A; `+0xF0` small gun → 0x14..0x3C |
-| 41 | crashed Star Destroyer (`FUN_7fd971dc`) | first class 45 → 5, 6, 7, 8, 4, 1, 3, 2; `+0xA8` → 9, A, B, 17, C, D, 16, 1B, 19, 18, 1A, 15, 14, 13, 12 |
-| 58 | Bespin balloon (`FUN_7fd97d00`) | `+0x84` → 1; `+0x88` → 2, 4, 6 (3, 5, 7 added when the player is close, `FUN_7fd0e47c`) |
-| 60 | gas platform (`FUN_7fd98064`, tables in the boot DOL at `0x8005D754`) | `+0x50` → 0x33..0x3A; `+0x54` → 0x13..0x32 |
+| 40 | Star Destroyer (`FUN_7fd96a14`) | `+0xE0..+0xEC` sensor balls left, right, big, command deck on 0x10..0x13; first class 44 (ion cannon) on 8, F, D, E, C, 9, B, A; `+0xF0` small gun on 0x14..0x3C |
+| 41 | crashed Star Destroyer (`FUN_7fd971dc`) | first class 45 on 5, 6, 7, 8, 4, 1, 3, 2; `+0xA8` on 9, A, B, 17, C, D, 16, 1B, 19, 18, 1A, 15, 14, 13, 12 |
+| 58 | Bespin balloon (`FUN_7fd97d00`) | `+0x84` on 1; `+0x88` on 2, 4, 6 (3, 5, 7 added when the player is close, `FUN_7fd0e47c`) |
+| 60 | gas platform (`FUN_7fd98064`, tables in the boot DOL at `0x8005D754`) | `+0x50` on 0x33..0x3A; `+0x54` on 0x13..0x32 |
 
 RS3 mounts are named locators: the host keeps a list of names at object `+0x124`
 and a slot number picks one (`FUN_7f227c4c` looks the slot up in the model,
@@ -221,14 +237,14 @@ then the locator's matrix). The locators are in `_su`: word 30 points to a u16
 per locator (its matrix slot), word 31 to 3x4 matrices in the space of the
 parent output matrix the `_nm` `locatormatrix` entry names (0 = model).
 
-| class | host | part → locators |
+| class | host | parts and the locators they mount on |
 |-------|------|-----------------|
-| 52 | Star Destroyer (`FUN_7f2cb768`, names `0x7F7073F0`) | `+0xF4` `loc_ball_l`, `+0xF8` `loc_ball_r`, `+0xFC` `loc_bball`, `+0x100` `loc_cdeck`; first class 0x38 → `loc_iongun_0005, 8, 6, 7, 2, 3, 1, 4`; `+0x104` → `loc_sgun_0001..0042` |
-| 53 | crashed Star Destroyer (`FUN_7f2cc20c`, `0x7F7053F8`) | first class 0x39 → `loc_ai_iongunright01..04`, `left01..04`; `+0xB4` → 14 `loc_ai_smallgun_*` |
-| 70 | Bespin balloon (`FUN_7f263594`, `0x7F66985C`) | `+0x8C` `loc_balloonengines`; `+0x90` → `loc_turbolaser001..006` (4..6 when close) |
-| 72 | gas platform (`FUN_7f263ad8`, `0x7F6698A8`) | `+0x50` → `loc_gascontainersmall001..008`; `+0x54` → `loc_gascontainer001..032` (with `+0x58` set the game keeps 7 of them at random) |
-| 263 | Republic gunship (`FUN_7f2bc43c`, `0x7F6F8200`) | `+0x234` → `loc_ballturret_left_01, 02`; `+0x238` → `right_01, 02`; `+0x23C` `loc_turretgun_left`; `+0x240` `loc_turretgun_right` |
-| 328 | Fondor station (`FUN_7f2ed164`, `0x7F72D324`) | `+0x50` → `loc_ai_smallgun_0001..00019` |
+| 52 | Star Destroyer (`FUN_7f2cb768`, names `0x7F7073F0`) | `+0xF4` `loc_ball_l`, `+0xF8` `loc_ball_r`, `+0xFC` `loc_bball`, `+0x100` `loc_cdeck`; first class 0x38 on `loc_iongun_0005, 8, 6, 7, 2, 3, 1, 4`; `+0x104` on `loc_sgun_0001..0042` |
+| 53 | crashed Star Destroyer (`FUN_7f2cc20c`, `0x7F7053F8`) | first class 0x39 on `loc_ai_iongunright01..04`, `left01..04`; `+0xB4` on 14 `loc_ai_smallgun_*` |
+| 70 | Bespin balloon (`FUN_7f263594`, `0x7F66985C`) | `+0x8C` `loc_balloonengines`; `+0x90` on `loc_turbolaser001..006` (4..6 when close) |
+| 72 | gas platform (`FUN_7f263ad8`, `0x7F6698A8`) | `+0x50` on `loc_gascontainersmall001..008`; `+0x54` on `loc_gascontainer001..032` (with `+0x58` set the game keeps 7 of them at random) |
+| 263 | Republic gunship (`FUN_7f2bc43c`, `0x7F6F8200`) | `+0x234` on `loc_ballturret_left_01, 02`; `+0x238` on `right_01, 02`; `+0x23C` `loc_turretgun_left`; `+0x240` `loc_turretgun_right` |
+| 328 | Fondor station (`FUN_7f2ed164`, `0x7F72D324`) | `+0x50` on `loc_ai_smallgun_0001..00019` |
 
 RS2 asteroid rocks (class 140) have no spawn handler: the asteroid fields
 (classes 143, 144) pick from them and scatter the rocks at random
@@ -411,7 +427,7 @@ sand patches repeated over the map.
 ## Geometry `_ge`
 
 Relocatable image: pointers are offsets from the part start, 0 = NULL.
-Renderer: RS2 `FUN_7fd276cc` → `FUN_7fd28ab0`; RS3 `FUN_7f397640` / `FUN_7f397738`.
+Renderer: RS2 `FUN_7fd276cc` and `FUN_7fd28ab0`; RS3 `FUN_7f397640` / `FUN_7f397738`.
 
 ```
 root +0x04 -> format list (opaque), +0x08 -> format list (translucent)
@@ -430,7 +446,7 @@ Mesh, RS2 (RS3 shifts the array block to +0x14 .. +0x30):
 RS3: +0x09 u8 extra UV sets
 ```
 
-Flags → GXSetVtxDesc: `0x2000` per-vertex PNMTXIDX, `0x1000` NBT, `0x0800`
+Flags, as the renderer passes them to GXSetVtxDesc: `0x2000` per-vertex PNMTXIDX, `0x1000` NBT, `0x0800`
 normals (RS3 only), `0x4000` color, `0x8000` texcoords; bits 0..3 = 16-bit
 index for pos/normal/color/uv. RS3 meshes without a normal array index a global
 s8 normal table at `0x80052C00` in the boot DOL.
@@ -456,7 +472,7 @@ VAT word (RS2 `FUN_7fd28640`, RS3 `FUN_7f398ef0`), one per vertex format index
 | 6-10 | position fixed-point shift |
 | 11-15| normal shift (hardware ignores it) |
 | 16-20| texcoord shift |
-| 21-22| RS2: 1 NBT, 2 NBT3; RS3: any → NBT3 |
+| 21-22| RS2: 1 NBT, 2 NBT3; RS3: any value means NBT3 |
 | 23   | RS3: positions dequantized on the CPU |
 
 Display lists are standard GX (`0x98` strips, `0x90` triangles, `0xA0` fans, `0x80` quads).
@@ -652,9 +668,9 @@ variant. A part whose packed size equals its level's size is stored raw and read
 straight into place (`FUN_7f3e9604`), as for a few Endor and Dantooine rocks and
 trees.
 
-* literal: `0nnnnnnn` → copy n+1 bytes
-* variant 0 match: `1lllldd dddddddd` → length l+3, distance d+1 (11 bits)
-* variant 1 match: `1lllllll dddddddd dddddddd` → length l+4, distance d+1
+* literal: `0nnnnnnn` copies n+1 bytes
+* variant 0 match: `1lllldd dddddddd` gives length l+3, distance d+1 (11 bits)
+* variant 1 match: `1lllllll dddddddd dddddddd` gives length l+4, distance d+1
 
 Standalone images: 32-byte header `{u16 width, u16 height, u8, u8 format, u8,
 u8 has_mips}`; format codes `0` I4, `1` I8, `2` IA4, `3` IA8, `9` RGB5A3,

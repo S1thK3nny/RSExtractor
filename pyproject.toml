@@ -7,6 +7,7 @@ name = "rsextractor"
 version = "0.1.0"
 description = "Extract models and textures from Star Wars Rogue Squadron II and III (GameCube)"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.21", "Pillow>=9"]
 
