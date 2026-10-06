@@ -30,6 +30,7 @@ class SceneMaterial:
     normal_map: Optional[str] = None    # tangent space (OpenGL) normal map, relative path
     emissive_map: Optional[str] = None  # emitted color, relative path
     specular_map: Optional[str] = None  # specular color x highlight mask, relative path
+    vertex_tint: bool = False           # multiply the color by the vertex colors
     double_sided: bool = False
     wrap_u: bool = True
     wrap_v: bool = True

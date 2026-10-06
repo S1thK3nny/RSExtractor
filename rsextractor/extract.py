@@ -1383,7 +1383,7 @@ class Exporter:
             return SceneMaterial(f"material{index}")
         name = f"{model}_{mat.name}"
         sm = SceneMaterial(safe_name(mat.name), diffuse=tuple(mat.color0), wrap_u=not mat.clamp_s,
-                           wrap_v=not mat.clamp_t, reflection=mat.reflection)
+                           wrap_v=not mat.clamp_t, reflection=mat.reflection, vertex_tint=mat.vertex_tint)
         if mat.specular:
             sm.specular, sm.specular_factor = tuple(mat.color1[:3]), 1.0
             sm.shininess = specular_exponent(mat.shininess)

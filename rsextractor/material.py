@@ -32,6 +32,12 @@ Layout (RS2 FUN_7fd2c3c8)::
 Flags 0x400 / 0x800 select clamped addressing in S / T (wrap otherwise). Flag 0x8000
 adds the color to what is behind (mostly sky layers and explosions).
 
+Flag 0x10000 (RS2) / 0x40000 (RS3) makes the vertex colors the material color of the
+lighting channel (GXSetChanCtrl mat_src = vertex, RS2 FUN_7fd34f94 -> FUN_7fd2a2a8, RS3
+FUN_7f3c9c00 -> FUN_7f3b4a60): ``texture * vertex color * (ambient + lights)``. It tints
+the Mon Calamari cruiser hull and scorches destroyed buildings and debris. Without it RS2
+adds the vertex colors as ambient light instead and RS3 does not use them.
+
 The shader is picked by the type (RS2) or by type bits (RS3, FUN_7f3d6430, mapped
 to the same numbering), see :func:`shader_index`. Lit shaders 4-8 and 16-19 have a
 reflective variant (+5 and +4, RS3 also 30-33 -> 34-37, tables 0x7fdd89d8 /
@@ -55,6 +61,7 @@ from typing import List, Optional, Tuple
 from .bump import HEIGHT, TILT
 
 ADDITIVE = 0x8000  # material flag: blended by adding the color
+VERTEX_TINT = {2: 0x10000, 3: 0x40000}  # material flag per game: lit color x vertex color
 
 # map type -> slot per game
 OPACITY = {2: 1, 3: 2}
@@ -186,6 +193,11 @@ class Material:
     def additive(self) -> bool:
         """Drawn by adding its color (flag 0x8000): star layers, horizon bands, explosions."""
         return bool(self.flags & ADDITIVE)
+
+    @property
+    def vertex_tint(self) -> bool:
+        """The vertex colors multiply the lit color (flag 0x10000 RS2 / 0x40000 RS3)."""
+        return bool(self.flags & VERTEX_TINT[self.game])
 
     @property
     def clamp_s(self) -> bool:

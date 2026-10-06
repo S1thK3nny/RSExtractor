@@ -501,6 +501,21 @@ alpha = its brightest channel and the color divided by it, which gives the same
 result over black. Neither game stores texture names:
 materials keep the Maya shader name (`phong31`), textures only a SHA-1.
 
+Flag `0x10000` (RS2) / `0x40000` (RS3) makes the vertex colors the material color
+of lighting channel 0 (`GXSetChanCtrl` mat_src = vertex), so a lit material shows
+`texture * vertex color * (ambient + lights)`. RS2 `FUN_7fd34f94` passes the mesh's
+color flag (`0x4000`) to `FUN_7fd2a2a8`: with the flag the vertex colors are the
+material color; without it they replace the level's ambient color (amb_src =
+vertex), i.e. baked ambient; unlit materials (flag `0x2`) ignore them. RS3
+(`FUN_7f3c9c00` -> `FUN_7f3b4a60`) only uses vertex colors with the flag and
+keeps the level ambient otherwise; a render state bit (`DAT_7f838830 & 0x80`, set by
+`FUN_7f3c2850`) turns the tint off for some pass not identified yet. The flag is on
+228 RS2 / 770 RS3 meshes, all with vertex colors: the Mon Calamari cruiser (hull
+tinted down to (193, 142, 132)) and headquarters, destroyed buildings, Star
+Destroyer debris, broken TIE wings, the Yavin temple and trees. The exporter marks
+these materials with the FBX user property `rsVertexTint`
+(`tools/blender_vertex_tint.py`).
+
 ### Highlights and reflections
 
 Shaders 4-13, 16-23, 27 and RS3 30-37 add a highlight (all materials with a

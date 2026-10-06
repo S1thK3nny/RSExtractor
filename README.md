@@ -19,6 +19,9 @@ III: Rebel Strike**, straight from your own disc images.
 * Reflections → the material's reflectivity as the FBX reflection factor
   (Blender: metallic), and every level's environment cube as six faces plus an
   equirectangular **panorama** (`envmap/panorama`) to use as the world.
+* Vertex color tints (the Mon Calamari cruiser hull, scorched wrecks and debris) →
+  the vertex colors plus an `rsVertexTint` custom property on the material;
+  `tools/blender_vertex_tint.py` multiplies them into the color in Blender.
 * Standalone images (menus, backdrops, gallery art, HUD, fonts) → PNG or TGA.
 
 ## Requirements
@@ -63,6 +66,18 @@ model's textures in `.../<resource>/textures/`, named
 texture names, so the material name (often a Maya default like `phong31`) is the
 best label there is. Player craft live under
 `data/plCraft/...`, level content under `lvlPackNN/...`.
+
+Some materials multiply their color by the model's vertex colors before lighting
+(the reddish patches on the Mon Calamari cruiser hull, scorch marks on destroyed
+buildings and debris). FBX has no way to say that, so these materials carry the
+custom property `rsVertexTint` and the vertex colors are in the mesh's color layer.
+`tools/blender_vertex_tint.py` imports FBX files and puts a Color Attribute multiply
+in front of the Base Color of every such material; run without files (or from
+Blender's Text Editor) it fixes the materials already in the scene:
+
+```sh
+blender --python tools/blender_vertex_tint.py -- output/RS2/lvlPack02/l09/01/gfxcalamaricruiser.fbx
+```
 
 Rebel Strike keeps most level models (walkers, troopers, buildings, props) in
 the shared `bData.pool`, referenced from the levels. Each one is written once,

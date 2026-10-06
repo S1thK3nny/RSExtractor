@@ -317,6 +317,8 @@ def write_fbx(scene: Scene, path: str, embed_textures: bool = False) -> None:
         if mat.emissive_map:
             _p70(mp, "EmissiveColor", "Color", "", "A", 1.0, 1.0, 1.0)
             _p70(mp, "EmissiveFactor", "Number", "", "A", 1.0)
+        if mat.vertex_tint:  # user property, read by tools/blender_vertex_tint.py
+            _p70(mp, "rsVertexTint", "bool", "", "U", True)
         count("Material")
         material_ids.append(mid)
         if mat.texture:
